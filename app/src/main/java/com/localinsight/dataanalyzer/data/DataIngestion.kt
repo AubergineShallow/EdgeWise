@@ -16,13 +16,12 @@ object DataIngestion {
         return try {
             val contentResolver = context.contentResolver
             val mimeType = contentResolver.getType(uri) ?: ""
-            val fileName = getFileName(context, uri)
+            val fileName = getFileName(context, uri).lowercase()
 
             when {
-                fileName.endsWith(".csv") || mimeType.contains("csv") -> extractCsvMetadata(context, uri)
-                fileName.endsWith(".pbix") -> extractPbixMetadata(context, uri)
-                // Assuming xlsx is converted or we do a basic parse (omitted full xlsx parsing for brevity without large libs)
-                else -> "Unsupported file type: $fileName"
+                mimeType.contains("csv") || mimeType.contains("comma-separated-values") || fileName.endsWith(".csv") -> extractCsvMetadata(context, uri)
+                mimeType.contains("zip") || fileName.endsWith(".pbix") -> extractPbixMetadata(context, uri)
+                else -> "Unsupported file type or MIME type: $mimeType for file: $fileName"
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error extracting metadata", e)

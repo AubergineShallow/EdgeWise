@@ -39,7 +39,7 @@ class LlmPipeline(private val context: Context, private val modelManager: ModelM
 
             val options = LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(modelFile.absolutePath)
-                .setMaxTokens(1024)
+                .setMaxTokens(2048)
                 .setTemperature(0.1f)
                 .build()
 
@@ -88,12 +88,14 @@ class LlmPipeline(private val context: Context, private val modelManager: ModelM
 
                 Schema: $schemaProfile
 
-                Respond ONLY with the Python code, do not include markdown formatting or explanations.
+                Respond ONLY with the Python code inside a ```python ``` block.
             """.trimIndent()
-            var pythonCode = llmInference!!.generateResponse(codePrompt)
+            val rawPythonCode = llmInference!!.generateResponse(codePrompt)
 
-            // Cleanup markdown if LLM includes it
-            pythonCode = pythonCode.replace("```python", "").replace("```", "").trim()
+            // Safer extraction using Regex
+            val codeRegex = Regex("```python\\s*([\\s\\S]*?)\\s*```")
+            val matchResult = codeRegex.find(rawPythonCode)
+            val pythonCode = matchResult?.groupValues?.get(1)?.trim() ?: rawPythonCode.trim()
 
             _pipelineState.value = PipelineState.Completed(schemaProfile, erDiagram, pythonCode)
 

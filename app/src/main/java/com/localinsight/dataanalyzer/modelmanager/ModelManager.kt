@@ -1,21 +1,22 @@
 package com.localinsight.dataanalyzer.modelmanager
 
+import android.app.DownloadManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.net.Uri
+import android.os.Environment
 import android.util.Log
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 
 class ModelManager(private val context: Context) {
     private val TAG = "ModelManager"
 
-    // Replace with a valid public URL to the quantized Gemma model
+    // Replace with a valid public URL or authenticated mechanism
     private val MODEL_URL = "https://example.com/gemma-2b-it-gpu-int4.bin"
     private val MODEL_FILE_NAME = "gemma-2b-it-gpu-int4.bin"
 
@@ -25,6 +26,8 @@ class ModelManager(private val context: Context) {
     private val _downloadStatus = MutableStateFlow<DownloadStatus>(DownloadStatus.Idle)
     val downloadStatus: StateFlow<DownloadStatus> = _downloadStatus.asStateFlow()
 
+    private var downloadId: Long = -1
+
     sealed class DownloadStatus {
         object Idle : DownloadStatus()
         object Downloading : DownloadStatus()
@@ -33,70 +36,51 @@ class ModelManager(private val context: Context) {
     }
 
     fun getModelFile(): File {
-        val modelDir = File(context.filesDir, "models")
-        if (!modelDir.exists()) {
-            modelDir.mkdirs()
-        }
-        return File(modelDir, MODEL_FILE_NAME)
+        return File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), MODEL_FILE_NAME)
     }
 
     fun isModelDownloaded(): Boolean {
         return getModelFile().exists()
     }
 
-    suspend fun downloadModel() = withContext(Dispatchers.IO) {
+    fun downloadModel() {
         if (isModelDownloaded()) {
             _downloadStatus.value = DownloadStatus.Completed
             _downloadProgress.value = 1f
-            return@withContext
+            return
         }
 
         try {
             _downloadStatus.value = DownloadStatus.Downloading
-            val url = URL(MODEL_URL)
-            val connection = url.openConnection() as HttpURLConnection
-            connection.connect()
+            val request = DownloadManager.Request(Uri.parse(MODEL_URL))
+                .setTitle("Downloading AI Model")
+                .setDescription("Fetching Gemma 4-bit edge model...")
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, MODEL_FILE_NAME)
 
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-                _downloadStatus.value = DownloadStatus.Error("Server returned HTTP ${connection.responseCode} ${connection.responseMessage}")
-                return@withContext
-            }
+            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            downloadId = downloadManager.enqueue(request)
 
-            val fileLength = connection.contentLength
-            val modelFile = getModelFile()
-
-            val input = connection.inputStream
-            val output = FileOutputStream(modelFile)
-
-            val data = ByteArray(4096)
-            var total: Long = 0
-            var count: Int
-
-            while (input.read(data).also { count = it } != -1) {
-                total += count
-                if (fileLength > 0) {
-                    val progress = (total * 100 / fileLength).toFloat() / 100f
-                    _downloadProgress.value = progress
+            // Register receiver to listen for completion
+            val onComplete = object : BroadcastReceiver() {
+                override fun onReceive(ctxt: Context?, intent: Intent?) {
+                    val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
+                    if (id == downloadId) {
+                        _downloadStatus.value = DownloadStatus.Completed
+                        _downloadProgress.value = 1f
+                        context.unregisterReceiver(this)
+                    }
                 }
-                output.write(data, 0, count)
             }
+            context.registerReceiver(onComplete, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), Context.RECEIVER_NOT_EXPORTED)
 
-            output.flush()
-            output.close()
-            input.close()
-
-            _downloadProgress.value = 1f
-            _downloadStatus.value = DownloadStatus.Completed
-            Log.d(TAG, "Model downloaded successfully to ${modelFile.absolutePath}")
+            // Note: In a production app, we would poll the DownloadManager query to update _downloadProgress.
+            // For simplicity here, we simulate it being in progress until completed.
+            _downloadProgress.value = 0.5f
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error downloading model", e)
-            _downloadStatus.value = DownloadStatus.Error(e.message ?: "Unknown error downloading model")
-            // Clean up potentially corrupted file
-            val modelFile = getModelFile()
-            if (modelFile.exists()) {
-                modelFile.delete()
-            }
+            Log.e(TAG, "Error initiating model download", e)
+            _downloadStatus.value = DownloadStatus.Error(e.message ?: "Unknown error initiating download")
         }
     }
 }

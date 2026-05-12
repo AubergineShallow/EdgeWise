@@ -2,6 +2,7 @@ package com.localinsight.dataanalyzer
 
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -23,8 +24,11 @@ import com.patrykandpatrick.vico.compose.axis.horizontal.rememberBottomAxis
 import com.patrykandpatrick.vico.compose.axis.vertical.rememberStartAxis
 import com.patrykandpatrick.vico.compose.chart.Chart
 import com.patrykandpatrick.vico.compose.chart.column.columnChart
+import com.patrykandpatrick.vico.core.entry.FloatEntry
 import com.patrykandpatrick.vico.core.entry.entryModelOf
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private lateinit var modelManager: ModelManager
@@ -70,8 +74,7 @@ fun DataAnalyzerScreen(
     var detailsContent by remember { mutableStateOf("") }
     var detailsTitle by remember { mutableStateOf("") }
 
-    // Sample static chart data since full execution requires a real LLM run on device
-    val chartEntryModel = entryModelOf(1f to 2f, 2f to 5f, 3f to 4f, 4f to 8f, 5f to 6f)
+    var chartEntryModel by remember { mutableStateOf(entryModelOf(1f to 2f, 2f to 5f, 3f to 4f, 4f to 8f, 5f to 6f)) }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -85,7 +88,20 @@ fun DataAnalyzerScreen(
                 // Assuming pipeline completes, we would then execute the python code
                 if (llmPipeline.pipelineState.value is LlmPipeline.PipelineState.Completed) {
                     val code = (llmPipeline.pipelineState.value as LlmPipeline.PipelineState.Completed).code
-                    pythonExecutor.executeScript(code)
+                    try {
+                        val outputJson = pythonExecutor.executeScript(code)
+                        val json = JSONObject(outputJson)
+                        val values = json.optJSONArray("values")
+                        if (values != null && values.length() > 0) {
+                            val entries = mutableListOf<FloatEntry>()
+                            for (i in 0 until values.length()) {
+                                entries.add(FloatEntry(i.toFloat(), values.getDouble(i).toFloat()))
+                            }
+                            chartEntryModel = entryModelOf(entries)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Failed to parse json chart data", e)
+                    }
                 }
             }
         }
@@ -99,7 +115,7 @@ fun DataAnalyzerScreen(
             Text("Downloading Gemma 4-bit Model...")
             LinearProgressIndicator(progress = { downloadProgress }, modifier = Modifier.fillMaxWidth())
             Button(onClick = {
-                coroutineScope.launch { modelManager.downloadModel() }
+                modelManager.downloadModel()
             }) {
                 Text("Start Download")
             }

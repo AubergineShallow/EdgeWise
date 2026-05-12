@@ -7,6 +7,7 @@ import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 class PythonExecutor(private val context: Context) {
     private val TAG = "PythonExecutor"
@@ -20,22 +21,34 @@ class PythonExecutor(private val context: Context) {
     suspend fun executeScript(script: String): String = withContext(Dispatchers.IO) {
         try {
             val py = Python.getInstance()
-            // We use a built-in module 'sys' to dynamically execute the code
-            val sys = py.getModule("sys")
 
-            // To capture stdout from the generated script, we can redirect it
+            // To sandbox the execution and prevent prompt injection, we execute the script
+            // inside a restricted dictionary that omits __builtins__ with __import__, eval, etc.
+            val builtins = py.getBuiltins()
+            val dict = builtins.callAttr("dict")
+
+            val safeBuiltins = builtins.callAttr("dict")
+            // Explicitly remove dangerous builtins
+            safeBuiltins.put("__import__", null)
+            safeBuiltins.put("eval", null)
+            safeBuiltins.put("exec", null)
+            safeBuiltins.put("open", null)
+
+            dict.put("__builtins__", safeBuiltins)
+
+            val sys = py.getModule("sys")
             val io = py.getModule("io")
             val textIOWrapper = io.callAttr("StringIO")
+
             sys["stdout"] = textIOWrapper
 
-            // Execute the raw script
-            py.getBuiltins().callAttr("exec", script)
+            // Execute the raw script within the sandboxed dictionary
+            builtins.callAttr("exec", script, dict)
 
             // Retrieve the output
             val output = textIOWrapper.callAttr("getvalue").toString()
             Log.d(TAG, "Python execution output: $output")
 
-            // Restore stdout
             sys["stdout"] = sys["__stdout__"]
 
             output

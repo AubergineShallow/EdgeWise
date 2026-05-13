@@ -84,15 +84,16 @@ class PythonExecutor(private val context: Context) {
     }
 
     /**
-     * Execute a Python script with an optional pre-loaded CSV data string.
-     * The CSV content is injected as a global variable called DATA_CSV.
+     * Execute a Python script with the file path.
+     * The file path is injected as a global variable FILE_PATH.
+     * A load_data() function is injected into builtins to handle CSV or XLSX reading automatically.
      *
      * Security: instead of an allowlist (which breaks pandas/numpy transitive imports),
      * we use a DENYLIST of explicitly dangerous modules.
      */
     suspend fun executeScript(
         script: String,
-        dataCsvContent: String = ""
+        filePath: String = ""
     ): ExecutionResult = withContext(Dispatchers.IO) {
         try {
             val py = Python.getInstance()
@@ -107,6 +108,7 @@ class PythonExecutor(private val context: Context) {
             val wrapperCode = """
 import builtins
 import sys
+import pandas as pd
 
 _original_open = builtins.open
 
@@ -115,17 +117,30 @@ def _safe_open(file, *args, **kwargs):
         return _original_open(file, *args, **kwargs)
     raise IOError(f"File access to '{file}' is restricted.")
 
-def run_script(script, data_csv_content):
+def _load_data(path=None):
+    if path is None:
+        path = builtins.FILE_PATH
+    if path.lower().endswith('.xlsx'):
+        return pd.read_excel(path)
+    return pd.read_csv(path)
+
+def run_script(script, file_path):
     exec_dict = {"__name__": "__main__"}
-    if data_csv_content:
-        exec_dict["DATA_CSV"] = data_csv_content
+    if file_path:
+        exec_dict["FILE_PATH"] = file_path
+        builtins.FILE_PATH = file_path
     
     builtins.open = _safe_open
+    builtins.load_data = _load_data
     
     try:
         exec(script, exec_dict)
     finally:
         builtins.open = _original_open
+        if hasattr(builtins, 'load_data'):
+            del builtins.load_data
+        if hasattr(builtins, 'FILE_PATH'):
+            del builtins.FILE_PATH
 """.trimIndent()
 
             // Define the wrapper function
@@ -145,8 +160,8 @@ def run_script(script, data_csv_content):
             sys["stderr"] = stderrCapture
 
             try {
-                // Execute the script, passing DATA_CSV as a direct string argument
-                runScript.call(script, dataCsvContent)
+                // Execute the script, passing file_path
+                runScript.call(script, filePath)
             } finally {
                 // Always restore original stdout/stderr
                 sys["stdout"] = origStdout

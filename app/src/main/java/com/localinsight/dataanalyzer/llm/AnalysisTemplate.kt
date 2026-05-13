@@ -29,7 +29,7 @@ data class AnalysisTemplate(
 
 /**
  * Registry of all pre-built analysis templates.
- * Each template is a tested Python script that reads DATA_CSV and outputs JSON.
+ * Each template is a tested Python script that reads data via load_data() and outputs JSON.
  */
 object TemplateRegistry {
 
@@ -50,10 +50,10 @@ object TemplateRegistry {
             requiredParams = listOf("groupCol", "valueCol"),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 grouped = df.groupby('{{groupCol}}')['{{valueCol}}'].mean().round(2)
 result = {"values": grouped.tolist(), "labels": grouped.index.astype(str).tolist(), "chart_type": "bar"}
 print(json.dumps(result))
@@ -69,10 +69,10 @@ print(json.dumps(result))
             requiredParams = listOf("groupCol", "valueCol"),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 grouped = df.groupby('{{groupCol}}')['{{valueCol}}'].sum().round(2)
 result = {"values": grouped.tolist(), "labels": grouped.index.astype(str).tolist(), "chart_type": "bar"}
 print(json.dumps(result))
@@ -88,10 +88,10 @@ print(json.dumps(result))
             requiredParams = listOf("groupCol", "valueCol"),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 grouped = df.groupby('{{groupCol}}')['{{valueCol}}'].median().round(2)
 result = {"values": grouped.tolist(), "labels": grouped.index.astype(str).tolist(), "chart_type": "bar"}
 print(json.dumps(result))
@@ -107,10 +107,10 @@ print(json.dumps(result))
             requiredParams = listOf("categoryCol"),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 counts = df['{{categoryCol}}'].value_counts()
 result = {"values": counts.tolist(), "labels": counts.index.astype(str).tolist(), "chart_type": "bar"}
 print(json.dumps(result))
@@ -126,10 +126,10 @@ print(json.dumps(result))
             requiredParams = listOf("groupCol", "valueCol"),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 top = df.groupby('{{groupCol}}')['{{valueCol}}'].mean().nlargest(10).round(2)
 result = {"values": top.tolist(), "labels": top.index.astype(str).tolist(), "chart_type": "bar"}
 print(json.dumps(result))
@@ -145,10 +145,10 @@ print(json.dumps(result))
             requiredParams = listOf("groupCol", "valueCol"),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 bottom = df.groupby('{{groupCol}}')['{{valueCol}}'].mean().nsmallest(10).round(2)
 result = {"values": bottom.tolist(), "labels": bottom.index.astype(str).tolist(), "chart_type": "bar"}
 print(json.dumps(result))
@@ -164,10 +164,10 @@ print(json.dumps(result))
             requiredParams = listOf("columns"),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 cols = {{columns}}
 means = [round(float(df[c].mean()), 2) for c in cols]
 result = {"values": means, "labels": cols, "chart_type": "bar"}
@@ -184,10 +184,10 @@ print(json.dumps(result))
             requiredParams = emptyList(),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 missing = df.isnull().sum()
 missing = missing[missing > 0]
 if len(missing) == 0:
@@ -207,11 +207,11 @@ print(json.dumps(result))
             requiredParams = emptyList(),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 import numpy as np
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
 outlier_counts = []
 for col in numeric_cols:
@@ -234,10 +234,10 @@ print(json.dumps(result))
             requiredParams = listOf("numericCol"),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 col = '{{numericCol}}'
 p25 = round(float(df[col].quantile(0.25)), 2)
 p50 = round(float(df[col].quantile(0.50)), 2)
@@ -256,10 +256,10 @@ print(json.dumps(result))
             requiredParams = listOf("rowCol", "colCol"),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 ct = pd.crosstab(df['{{rowCol}}'], df['{{colCol}}'])
 labels = []
 values = []
@@ -283,10 +283,10 @@ print(json.dumps(result))
             requiredParams = listOf("xCol", "yCol"),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 df = df.sort_values('{{xCol}}')
 grouped = df.groupby('{{xCol}}')['{{yCol}}'].mean().round(2)
 result = {"values": grouped.tolist(), "labels": grouped.index.astype(str).tolist(), "chart_type": "line"}
@@ -303,10 +303,10 @@ print(json.dumps(result))
             requiredParams = listOf("xCol", "yCol"),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 df = df.sort_values('{{xCol}}')
 cumsum = df.groupby('{{xCol}}')['{{yCol}}'].sum().cumsum().round(2)
 result = {"values": cumsum.tolist(), "labels": cumsum.index.astype(str).tolist(), "chart_type": "line"}
@@ -325,10 +325,10 @@ print(json.dumps(result))
             requiredParams = listOf("categoryCol"),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 counts = df['{{categoryCol}}'].value_counts()
 result = {"values": counts.tolist(), "labels": counts.index.astype(str).tolist(), "chart_type": "pie"}
 print(json.dumps(result))
@@ -344,10 +344,10 @@ print(json.dumps(result))
             requiredParams = listOf("binaryCol"),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 counts = df['{{binaryCol}}'].value_counts()
 result = {"values": counts.tolist(), "labels": counts.index.astype(str).tolist(), "chart_type": "pie"}
 print(json.dumps(result))
@@ -365,11 +365,11 @@ print(json.dumps(result))
             requiredParams = listOf("numericCol"),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 import numpy as np
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 col = df['{{numericCol}}'].dropna()
 counts, edges = np.histogram(col, bins=10)
 labels = [f"{edges[i]:.1f}-{edges[i+1]:.1f}" for i in range(len(counts))]
@@ -389,11 +389,11 @@ print(json.dumps(result))
             requiredParams = emptyList(),
             templateCode = """
 import pandas as pd
-from io import StringIO
+
 import json
 import numpy as np
 
-df = pd.read_csv(StringIO(DATA_CSV))
+df = load_data()
 numeric_df = df.select_dtypes(include=[np.number])
 corr = numeric_df.corr().round(2)
 matrix = corr.values.tolist()

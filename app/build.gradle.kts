@@ -59,6 +59,7 @@ chaquopy {
         pip {
             install("pandas")
             install("numpy")
+            install("openpyxl")
         }
     }
 }

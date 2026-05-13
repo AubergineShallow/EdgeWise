@@ -1,10 +1,12 @@
 package com.localinsight.dataanalyzer.llm
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
+import com.localinsight.dataanalyzer.data.DataIngestion
 import com.localinsight.dataanalyzer.modelmanager.ModelManager
 import com.localinsight.dataanalyzer.python.ExecutionResult
 import com.localinsight.dataanalyzer.python.PythonExecutor
@@ -115,6 +117,7 @@ class LlmPipeline(
     private var cachedSchema: String = ""
     private var cachedErDiagram: String = ""
     private var cachedDataFilePath: String = ""
+    private var cachedFileContent: String = ""
     private var cachedMetadata: String = ""
     private var currentAnalysisDescription: String = ""
 
@@ -223,7 +226,7 @@ STRICT RULES:
     //  Pipeline Entry Point
     // ────────────────────────────────────────────
 
-    suspend fun runPipeline(metadata: String, dataFilePath: String) = withContext(Dispatchers.IO) {
+    suspend fun runPipeline(metadata: String, dataFilePath: String, fileUri: Uri) = withContext(Dispatchers.IO) {
         if (engine == null) {
             _pipelineState.value = PipelineState.Error("LLM not initialized")
             return@withContext
@@ -231,6 +234,7 @@ STRICT RULES:
 
         cachedMetadata = metadata
         cachedDataFilePath = dataFilePath
+        cachedFileContent = DataIngestion.readFullContent(context, fileUri)
 
         try {
             // ── Step 1: Schema Profiling (streamed with CoT) ──
@@ -459,7 +463,7 @@ SUGGESTION 3: [Short Title] | [One sentence description]
                     maxAttempts = MAX_COMPILE_RETRIES
                 )
 
-                executionResult = pythonExecutor.executeScript(pythonCode)
+                executionResult = pythonExecutor.executeScript(pythonCode, mapOf("DATA_CSV" to cachedFileContent))
                 executionLog.appendLine("── Attempt $compileAttempt ──")
                 executionLog.appendLine("stdout: ${executionResult.stdout}")
                 executionLog.appendLine("stderr: ${executionResult.stderr}")
@@ -535,7 +539,7 @@ SUGGESTION 3: [Short Title] | [One sentence description]
                     attempt = compileAttempt,
                     maxAttempts = MAX_COMPILE_RETRIES
                 )
-                executionResult = pythonExecutor.executeScript(pythonCode)
+                executionResult = pythonExecutor.executeScript(pythonCode, mapOf("DATA_CSV" to cachedFileContent))
                 executionLog.appendLine("── Output fix attempt $outputAttempt ──")
                 executionLog.appendLine("stdout: ${executionResult.stdout}")
                 executionLog.appendLine("stderr: ${executionResult.stderr}")
@@ -573,7 +577,12 @@ Think step by step to write a Python data analysis script.
 
 TASK: $analysisDescription
 
-DATA FILE: The data is available at '$cachedDataFilePath'. Since this is an Android content URI, the script should generate sample/simulated data based on the schema instead of reading the file directly.
+DATA ACCESS: A string variable called DATA_CSV is already pre-loaded in the script's global scope. It contains the full CSV file content. To load it into a DataFrame, use:
+  import pandas as pd
+  from io import StringIO
+  df = pd.read_csv(StringIO(DATA_CSV))
+
+Do NOT simulate, fabricate, or hardcode any data. You MUST use the DATA_CSV variable to read the real data.
 
 SCHEMA:
 $cachedSchema
@@ -581,12 +590,14 @@ $cachedSchema
 INSTRUCTIONS:
 1. First, plan what pandas operations are needed for this analysis.
 2. Then write the complete Python script.
-3. The script MUST use only: pandas, numpy, json, io, math, statistics, collections, re, datetime, csv.
-4. The script MUST print exactly ONE line to stdout: a valid JSON object.
-5. The JSON object MUST have a "values" key containing a list of numbers suitable for a bar chart.
-6. The JSON object SHOULD also have a "labels" key containing a list of string labels for each bar.
-7. Do NOT use matplotlib or any plotting libraries.
-8. Do NOT use open() to read files.
+3. The script MUST start by loading the real data from DATA_CSV using pd.read_csv(StringIO(DATA_CSV)).
+4. The script MUST use only: pandas, numpy, json, io, math, statistics, collections, re, datetime, csv.
+5. The script MUST print exactly ONE line to stdout: a valid JSON object.
+6. The JSON object MUST have a "values" key containing a list of numbers suitable for a bar chart.
+7. The JSON object SHOULD also have a "labels" key containing a list of string labels for each bar.
+8. Do NOT use matplotlib or any plotting libraries.
+9. Do NOT use open() to read files. Use DATA_CSV instead.
+10. Do NOT simulate or generate fake data. The real data is in DATA_CSV.
 
 Respond ONLY with the Python code inside a ```python ``` block. No other text outside the code block.
 """.trimIndent()
@@ -616,6 +627,8 @@ ERROR:
 $errorMessage
 
 Fix the script. Remember:
+- The real data is available as a pre-loaded string variable called DATA_CSV. Load it with: df = pd.read_csv(StringIO(DATA_CSV))
+- Do NOT simulate, fabricate, or hardcode data. Use DATA_CSV.
 - Print exactly ONE line of valid JSON to stdout with a "values" key containing a list of numbers.
 - Only use allowed modules: pandas, numpy, json, io, math, statistics, collections, re, datetime, csv.
 - Do NOT use open() or matplotlib.

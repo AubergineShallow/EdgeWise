@@ -85,6 +85,25 @@ object DataIngestion {
         """.trimIndent()
     }
 
+    /**
+     * Read the full file content as a string using ContentResolver.
+     * This is used to inject the actual data into the Python execution context.
+     */
+    fun readFullContent(context: Context, uri: Uri): String {
+        return try {
+            val inputStream = context.contentResolver.openInputStream(uri)
+                ?: return ""
+            val reader = BufferedReader(InputStreamReader(inputStream))
+            val content = reader.readText()
+            reader.close()
+            inputStream.close()
+            content
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading full file content", e)
+            ""
+        }
+    }
+
     private fun getFileName(context: Context, uri: Uri): String {
         var result: String? = null
         if (uri.scheme == "content") {

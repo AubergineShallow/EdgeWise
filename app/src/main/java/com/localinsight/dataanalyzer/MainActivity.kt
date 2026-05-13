@@ -115,7 +115,7 @@ fun DataAnalyzerScreen(
                     coroutineScope.launch {
                         llmPipeline.initialize()
                         val metadata = DataIngestion.extractMetadata(context, it)
-                        llmPipeline.runPipeline(metadata, it.toString())
+                        llmPipeline.runPipeline(metadata, it.toString(), it)
                     }
                 }
             }

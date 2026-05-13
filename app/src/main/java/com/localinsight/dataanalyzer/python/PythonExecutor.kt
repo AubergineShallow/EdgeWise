@@ -30,7 +30,15 @@ class PythonExecutor(private val context: Context) {
         }
     }
 
-    suspend fun executeScript(script: String): ExecutionResult = withContext(Dispatchers.IO) {
+    /**
+     * Execute a Python script with optional pre-loaded data variables.
+     * Variables in [dataVariables] are injected into the script's global dict
+     * so the LLM-generated code can reference actual file data without reading files.
+     */
+    suspend fun executeScript(
+        script: String,
+        dataVariables: Map<String, String> = emptyMap()
+    ): ExecutionResult = withContext(Dispatchers.IO) {
         try {
             val py = Python.getInstance()
             val builtins = py.getBuiltins()
@@ -63,6 +71,11 @@ def _safe_import(name, *args, **kwargs):
             sandboxBuiltins.put("__import__", safeImport)
             sandboxBuiltins.put("open", null)  // Block filesystem access
             globalDict.put("__builtins__", sandboxBuiltins)
+
+            // Inject pre-loaded data variables into the global dict
+            for ((key, value) in dataVariables) {
+                globalDict.put(key, value)
+            }
 
             // Capture stdout and stderr
             val sys = py.getModule("sys")

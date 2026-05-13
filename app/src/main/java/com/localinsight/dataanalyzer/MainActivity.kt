@@ -113,17 +113,17 @@ fun DataAnalyzerScreen(
         } else {
             // ── Main App ──
             val filePickerLauncher = rememberLauncherForActivityResult(
-                contract = ActivityResultContracts.OpenDocument()
-            ) { uri: Uri? ->
-                uri?.let {
+                contract = ActivityResultContracts.OpenMultipleDocuments()
+            ) { uris: List<Uri> ->
+                if (uris.isNotEmpty()) {
                     coroutineScope.launch {
                         llmPipeline.initialize()
-                        val cachedFilePath = DataIngestion.cacheDataFile(context, it)
-                        if (cachedFilePath != null) {
-                            val metadata = DataIngestion.extractMetadata(context, it)
-                            llmPipeline.runPipeline(metadata, cachedFilePath, it)
+                        val cachedFilePaths = DataIngestion.cacheMultipleDataFiles(context, uris)
+                        if (cachedFilePaths != null) {
+                            val metadata = DataIngestion.extractMetadata(context, uris)
+                            llmPipeline.runPipeline(metadata, cachedFilePaths, uris)
                         } else {
-                            android.widget.Toast.makeText(context, "Failed to load file", android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, "Failed to load files", android.widget.Toast.LENGTH_SHORT).show()
                         }
                     }
                 }

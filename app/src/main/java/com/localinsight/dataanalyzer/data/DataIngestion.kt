@@ -12,48 +12,39 @@ object DataIngestion {
     private const val TAG = "DataIngestion"
     private const val SAMPLE_ROWS = 5
 
-    fun extractMetadata(context: Context, uri: Uri): String {
-        return try {
-            val contentResolver = context.contentResolver
-            val mimeType = contentResolver.getType(uri) ?: ""
-            val fileName = getFileName(context, uri).lowercase()
+    /**
+     * Extract metadata for a list of URIs. Loops through all files to provide
+     * basic file info. Robust schema extraction is still handled by Python later.
+     */
+    fun extractMetadata(context: Context, uris: List<Uri>): String {
+        if (uris.isEmpty()) return "No files provided."
 
-            when {
-                mimeType.contains("csv") || mimeType.contains("comma-separated-values") || fileName.endsWith(".csv") -> extractCsvMetadata(context, uri)
-                mimeType.contains("zip") || fileName.endsWith(".pbix") -> extractPbixMetadata(context, uri)
-                else -> "Unsupported file type or MIME type: $mimeType for file: $fileName"
+        val sb = StringBuilder()
+        sb.appendLine("${uris.size} file(s) selected:")
+
+        for ((index, uri) in uris.withIndex()) {
+            try {
+                val contentResolver = context.contentResolver
+                val mimeType = contentResolver.getType(uri) ?: ""
+                val fileName = getFileName(context, uri).lowercase()
+
+                val fileInfo = when {
+                    mimeType.contains("csv") || mimeType.contains("comma-separated-values") || fileName.endsWith(".csv") -> {
+                        "File ${index + 1}: CSV - $fileName"
+                    }
+                    fileName.endsWith(".xlsx") || mimeType.contains("spreadsheetml") -> {
+                        "File ${index + 1}: Excel (.xlsx) - $fileName"
+                    }
+                    mimeType.contains("zip") || fileName.endsWith(".pbix") -> extractPbixMetadata(context, uri)
+                    else -> "File ${index + 1}: Unsupported ($mimeType) - $fileName"
+                }
+                sb.appendLine(fileInfo)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error extracting metadata for uri: $uri", e)
+                sb.appendLine("File ${index + 1}: Error - ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error extracting metadata", e)
-            "Error extracting metadata: ${e.message}"
         }
-    }
-
-    private fun extractCsvMetadata(context: Context, uri: Uri): String {
-        val inputStream = context.contentResolver.openInputStream(uri) ?: return "Unable to read file"
-        val reader = BufferedReader(InputStreamReader(inputStream))
-
-        val header = reader.readLine() ?: return "Empty file"
-        val sampleData = mutableListOf<String>()
-
-        for (i in 0 until SAMPLE_ROWS) {
-            val line = reader.readLine()
-            if (line != null) {
-                sampleData.add(line)
-            } else {
-                break
-            }
-        }
-
-        reader.close()
-        inputStream.close()
-
-        return """
-            File Type: CSV
-            Headers: $header
-            Sample Data ($SAMPLE_ROWS rows):
-            ${sampleData.joinToString("\n")}
-        """.trimIndent()
+        return sb.toString().trimEnd()
     }
 
     private fun extractPbixMetadata(context: Context, uri: Uri): String {
@@ -86,11 +77,14 @@ object DataIngestion {
     }
 
     /**
-     * Cache the selected data file into the app's internal cache directory.
-     * Creates a new file for each analysis to prevent cache growth (by clearing old ones).
-     * Returns the absolute file path.
+     * Cache multiple data files into the app's internal cache directory.
+     * Clears old cached files to prevent growth.
+     * Names them sequentially (e.g., part_0.csv, part_1.xlsx).
+     * Returns a pipe-delimited string of absolute file paths.
      */
-    fun cacheDataFile(context: Context, uri: Uri): String? {
+    fun cacheMultipleDataFiles(context: Context, uris: List<Uri>): String? {
+        if (uris.isEmpty()) return null
+
         return try {
             val cacheDir = java.io.File(context.cacheDir, "data_cache")
             if (!cacheDir.exists()) {
@@ -100,21 +94,29 @@ object DataIngestion {
                 cacheDir.listFiles()?.forEach { it.delete() }
             }
 
-            val fileName = getFileName(context, uri)
-            val extension = fileName.substringAfterLast('.', "")
-            val cachedFile = java.io.File(cacheDir, "current_analysis_data.${if (extension.isNotEmpty()) extension else "csv"}")
+            val cachedPaths = mutableListOf<String>()
 
-            val inputStream = context.contentResolver.openInputStream(uri) ?: return null
-            val outputStream = java.io.FileOutputStream(cachedFile)
+            for ((index, uri) in uris.withIndex()) {
+                val fileName = getFileName(context, uri)
+                val extension = fileName.substringAfterLast('.', "csv")
+                val safeExtension = if (extension.isNotEmpty()) extension else "csv"
 
-            inputStream.copyTo(outputStream)
+                val cachedFile = java.io.File(cacheDir, "part_$index.$safeExtension")
 
-            inputStream.close()
-            outputStream.close()
+                val inputStream = context.contentResolver.openInputStream(uri) ?: continue
+                val outputStream = java.io.FileOutputStream(cachedFile)
 
-            cachedFile.absolutePath
+                inputStream.copyTo(outputStream)
+
+                inputStream.close()
+                outputStream.close()
+
+                cachedPaths.add(cachedFile.absolutePath)
+            }
+
+            if (cachedPaths.isEmpty()) null else cachedPaths.joinToString("|")
         } catch (e: Exception) {
-            Log.e(TAG, "Error caching data file", e)
+            Log.e(TAG, "Error caching data files", e)
             null
         }
     }

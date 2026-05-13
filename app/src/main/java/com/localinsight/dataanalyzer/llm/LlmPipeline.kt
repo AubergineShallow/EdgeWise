@@ -229,7 +229,7 @@ STRICT RULES:
     //  Pipeline Entry Point
     // ────────────────────────────────────────────
 
-    suspend fun runPipeline(metadata: String, dataFilePath: String, fileUri: Uri) = withContext(Dispatchers.IO) {
+    suspend fun runPipeline(metadata: String, dataFilePath: String, fileUris: List<Uri>) = withContext(Dispatchers.IO) {
         if (engine == null) {
             _pipelineState.value = PipelineState.Error("LLM not initialized")
             return@withContext

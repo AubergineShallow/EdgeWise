@@ -120,9 +120,36 @@ def _safe_open(file, *args, **kwargs):
 def _load_data(path=None):
     if path is None:
         path = builtins.FILE_PATH
-    if path.lower().endswith('.xlsx'):
-        return pd.read_excel(path)
-    return pd.read_csv(path)
+
+    paths = path.split('|')
+    dfs = []
+
+    for p in paths:
+        if p.lower().endswith('.xlsx'):
+            dfs.append(pd.read_excel(p))
+        else:
+            dfs.append(pd.read_csv(p))
+
+    if len(dfs) == 1:
+        df = dfs[0]
+    else:
+        # Smart Merge Logic
+        common_cols = set(dfs[0].columns)
+        for d in dfs[1:]:
+            common_cols = common_cols.intersection(set(d.columns))
+
+        if common_cols:
+            df = dfs[0]
+            for d in dfs[1:]:
+                df = pd.merge(df, d, on=list(common_cols), how='outer')
+        else:
+            df = pd.concat(dfs, ignore_index=True)
+
+    # Safety limit to prevent edge device OOM
+    if len(df) > 10000:
+        df = df.sample(n=10000, random_state=42)
+
+    return df
 
 def run_script(script, file_path):
     exec_dict = {"__name__": "__main__"}

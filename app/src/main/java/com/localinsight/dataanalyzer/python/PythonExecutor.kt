@@ -43,38 +43,42 @@ class PythonExecutor(private val context: Context) {
             val py = Python.getInstance()
             val builtins = py.getBuiltins()
 
-            // Build a sandboxed global dict for exec()
-            val globalDict = builtins.callAttr("dict")
+            val setupDict = builtins.callAttr("dict")
 
-            // Create an import allowlist wrapper in Python
-            // This replaces the original approach of nulling out __import__,
-            // which broke ALL imports including pandas/numpy.
-            val allowlistCode = """
-import builtins as _builtins
+            // Create an import allowlist wrapper in Python and put it in a ModuleType.
+            // This fixes the issue where some packages expect __builtins__ to be a module rather than a dict.
+            val setupCode = """
+import builtins
+import types
 
-_original_import = _builtins.__import__
 _allowed = ${ALLOWED_MODULES.joinToString(", ") { "'$it'" }.let { "{$it}" }}
+_original_import = builtins.__import__
 
 def _safe_import(name, *args, **kwargs):
     top_level = name.split('.')[0]
     if top_level not in _allowed:
         raise ImportError(f"Import of '{name}' is not allowed. Permitted modules: {sorted(_allowed)}")
     return _original_import(name, *args, **kwargs)
+
+safe_builtins = types.ModuleType("builtins")
+safe_builtins.__dict__.update(vars(builtins))
+safe_builtins.__import__ = _safe_import
+safe_builtins.open = None
 """.trimIndent()
 
-            // Install the safe import hook
-            builtins.callAttr("exec", allowlistCode, globalDict)
+            // Run the setup code
+            builtins.callAttr("exec", setupCode, setupDict)
+            
+            // Extract the constructed safe builtins module
+            val safeBuiltins = setupDict.callAttr("get", "safe_builtins")
 
-            // Now replace __import__ in the sandbox with our safe version
-            val safeImport = globalDict.callAttr("get", "_safe_import")
-            val sandboxBuiltins = builtins.callAttr("dict", builtins.callAttr("vars", py.getModule("builtins")))
-            sandboxBuiltins.put("__import__", safeImport)
-            sandboxBuiltins.put("open", null)  // Block filesystem access
-            globalDict.put("__builtins__", sandboxBuiltins)
+            // Build the execution dictionary for the LLM script
+            val execDict = builtins.callAttr("dict")
+            execDict.put("__builtins__", safeBuiltins)
 
-            // Inject pre-loaded data variables into the global dict
+            // Inject pre-loaded data variables into the execution dict
             for ((key, value) in dataVariables) {
-                globalDict.put(key, value)
+                execDict.put(key, value)
             }
 
             // Capture stdout and stderr
@@ -90,7 +94,7 @@ def _safe_import(name, *args, **kwargs):
             sys["stderr"] = stderrCapture
 
             try {
-                builtins.callAttr("exec", script, globalDict)
+                builtins.callAttr("exec", script, execDict)
             } finally {
                 // Always restore original stdout/stderr
                 sys["stdout"] = origStdout

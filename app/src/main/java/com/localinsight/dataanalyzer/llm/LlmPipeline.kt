@@ -585,7 +585,7 @@ Write a short Python script for this data analysis task.
 
 TASK: $analysisDescription
 
-DATA ACCESS: A string variable called DATA_CSV is pre-loaded. Load it with:
+DATA ACCESS: The variable DATA_CSV is ALREADY DEFINED in the global scope. It contains the FULL CSV file (1200+ rows). Do NOT redefine or reassign DATA_CSV. Just use it directly:
   import pandas as pd
   from io import StringIO
   df = pd.read_csv(StringIO(DATA_CSV))
@@ -594,12 +594,12 @@ SCHEMA:
 $cachedSchema
 
 RULES:
-1. Load data from DATA_CSV. Do NOT simulate or hardcode data.
+1. DATA_CSV is already defined. Do NOT write DATA_CSV = anything. Just read it.
 2. AVAILABLE: pandas, numpy, json, io, math, statistics, collections, re, datetime, csv.
 3. NOT INSTALLED (will crash if imported): scipy, sklearn, matplotlib, seaborn, plotly.
 4. For correlation, use df.corr() or numpy.corrcoef(). Do NOT use scipy.stats.
 5. Print exactly ONE line: a JSON object with a "values" key (list of numbers) and a "labels" key (list of strings).
-6. Keep the script under 40 lines total. No comments needed.
+6. Keep the script under 30 lines total. No comments needed.
 7. Do NOT use open() to read files.
 
 Respond ONLY with the Python code inside a ```python ``` block.
@@ -610,7 +610,36 @@ Respond ONLY with the Python code inside a ```python ``` block.
         // Extract code from markdown code block
         val codeRegex = Regex("```python\\s*([\\s\\S]*?)\\s*```")
         val matchResult = codeRegex.find(rawResponse)
-        return matchResult?.groupValues?.get(1)?.trim() ?: rawResponse.trim()
+        val code = matchResult?.groupValues?.get(1)?.trim() ?: rawResponse.trim()
+        return sanitizeCode(code)
+    }
+
+    /**
+     * Strip any DATA_CSV = "..." or DATA_CSV = '''...''' assignments that the model
+     * might hardcode. The real DATA_CSV is injected by PythonExecutor at runtime.
+     */
+    private fun sanitizeCode(code: String): String {
+        // Remove multi-line DATA_CSV = """...""" or DATA_CSV = '''...'''
+        var cleaned = code.replace(
+            Regex("""DATA_CSV\s*=\s*"{3}[\s\S]*?"{3}"""), ""
+        )
+        cleaned = cleaned.replace(
+            Regex("""DATA_CSV\s*=\s*'{3}[\s\S]*?'{3}"""), ""
+        )
+        // Remove single-line DATA_CSV = "..." or DATA_CSV = '...'
+        cleaned = cleaned.replace(
+            Regex("""DATA_CSV\s*=\s*"[^"]*""""), ""
+        )
+        cleaned = cleaned.replace(
+            Regex("""DATA_CSV\s*=\s*'[^']*'"""), ""
+        )
+        // Remove any remaining DATA_CSV = ... (single line, e.g. DATA_CSV = some_var)
+        cleaned = cleaned.replace(
+            Regex("""(?m)^DATA_CSV\s*=\s*[^\n]*$"""), ""
+        )
+        // Clean up excessive blank lines left behind
+        cleaned = cleaned.replace(Regex("""\n{3,}"""), "\n\n")
+        return cleaned.trim()
     }
 
     private suspend fun selfCorrectCode(
@@ -630,12 +659,12 @@ ERROR:
 $errorMessage
 
 Fix the script. Key rules:
-- Load data with: df = pd.read_csv(StringIO(DATA_CSV))
+- DATA_CSV is ALREADY DEFINED. Do NOT redefine it. Just use: df = pd.read_csv(StringIO(DATA_CSV))
 - AVAILABLE: pandas, numpy, json, io, math, statistics.
 - NOT INSTALLED (do NOT import): scipy, sklearn, matplotlib, seaborn, plotly.
 - For correlation use df.corr() or numpy.corrcoef(), NOT scipy.stats.
 - Print ONE line of JSON with a "values" key (list of numbers) and "labels" key (list of strings).
-- Keep code under 40 lines. No comments.
+- Keep code under 30 lines. No comments.
 
 Respond ONLY with the corrected Python code inside a ```python ``` block.
 """.trimIndent()
@@ -644,7 +673,8 @@ Respond ONLY with the corrected Python code inside a ```python ``` block.
 
         val codeRegex = Regex("```python\\s*([\\s\\S]*?)\\s*```")
         val matchResult = codeRegex.find(rawResponse)
-        return matchResult?.groupValues?.get(1)?.trim() ?: rawResponse.trim()
+        val code = matchResult?.groupValues?.get(1)?.trim() ?: rawResponse.trim()
+        return sanitizeCode(code)
     }
 
     // ────────────────────────────────────────────

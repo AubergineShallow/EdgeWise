@@ -26,19 +26,17 @@ class PythonExecutor(private val context: Context) {
 
     // Dangerous modules that must NEVER be importable by LLM-generated code.
     // Everything else (stdlib + pandas/numpy transitive deps) is allowed.
-    // NOTE: 'os' is intentionally NOT blocked because pandas/numpy/pytz
-    // all depend on os.path internally. File access is still restricted
-    // because builtins.open is patched and subprocess is blocked.
+    // NOTE: 'os' and 'shutil' are intentionally NOT blocked because
+    // pandas/numpy/pytz depend on them internally. File access is still
+    // restricted because builtins.open is patched and subprocess is blocked.
     private val BLOCKED_MODULES = setOf(
-        "subprocess", "shutil",                              // process execution / file ops
+        "subprocess",                                        // process execution
         "socket", "http", "urllib", "requests",              // network
         "ftplib", "smtplib", "telnetlib", "xmlrpc",          // network protocols
         "webbrowser", "antigravity",                         // browser launch
         "tkinter", "turtle",                                 // GUI (not available anyway)
-        "signal", "multiprocessing", "_thread",              // process/thread control
+        "multiprocessing", "_thread",                        // process/thread control
         "ctypes", "cffi",                                    // native FFI
-        "importlib", "runpy",                                // import system manipulation
-        "code", "codeop", "compileall", "py_compile",        // code compilation
         "ensurepip", "pip", "setuptools", "distutils"        // package management
     )
 

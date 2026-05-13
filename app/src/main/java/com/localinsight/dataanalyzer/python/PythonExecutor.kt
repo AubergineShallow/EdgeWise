@@ -43,42 +43,57 @@ class PythonExecutor(private val context: Context) {
             val py = Python.getInstance()
             val builtins = py.getBuiltins()
 
-            val setupDict = builtins.callAttr("dict")
+            val globalDict = builtins.callAttr("dict")
 
-            // Create an import allowlist wrapper in Python and put it in a ModuleType.
-            // This fixes the issue where some packages expect __builtins__ to be a module rather than a dict.
-            val setupCode = """
+            // We use a Python wrapper function to handle the execution.
+            // This safely patches the global builtins.__import__ and builtins.open 
+            // only for the duration of the script, avoiding Chaquopy compatibility issues 
+            // with custom __builtins__ objects.
+            val wrapperCode = """
 import builtins
-import types
+import sys
 
 _allowed = ${ALLOWED_MODULES.joinToString(", ") { "'$it'" }.let { "{$it}" }}
 _original_import = builtins.__import__
+_original_open = builtins.open
 
 def _safe_import(name, *args, **kwargs):
     top_level = name.split('.')[0]
-    if top_level not in _allowed:
+    if top_level not in _allowed and top_level not in sys.builtin_module_names:
         raise ImportError(f"Import of '{name}' is not allowed. Permitted modules: {sorted(_allowed)}")
     return _original_import(name, *args, **kwargs)
 
-safe_builtins = types.ModuleType("builtins")
-safe_builtins.__dict__.update(vars(builtins))
-safe_builtins.__import__ = _safe_import
-safe_builtins.open = None
+def _safe_open(file, *args, **kwargs):
+    # Allow reading from Chaquopy asset paths or internal python lib paths,
+    # but block arbitrary file reading by the LLM.
+    if isinstance(file, str) and ("chaquopy" in file or "/data/user" in file):
+        return _original_open(file, *args, **kwargs)
+    raise IOError(f"File access to '{file}' is restricted.")
+
+def run_script(script, data_vars):
+    exec_dict = {"__name__": "__main__"}
+    exec_dict.update(data_vars)
+    
+    # Patch globally
+    builtins.__import__ = _safe_import
+    builtins.open = _safe_open
+    
+    try:
+        exec(script, exec_dict)
+    finally:
+        # Always restore globally
+        builtins.__import__ = _original_import
+        builtins.open = _original_open
 """.trimIndent()
 
-            // Run the setup code
-            builtins.callAttr("exec", setupCode, setupDict)
-            
-            // Extract the constructed safe builtins module
-            val safeBuiltins = setupDict.callAttr("get", "safe_builtins")
+            // Define the wrapper function
+            builtins.callAttr("exec", wrapperCode, globalDict)
+            val runScript = globalDict.callAttr("get", "run_script")
 
-            // Build the execution dictionary for the LLM script
-            val execDict = builtins.callAttr("dict")
-            execDict.put("__builtins__", safeBuiltins)
-
-            // Inject pre-loaded data variables into the execution dict
+            // Convert Kotlin dataVariables map to Python dict
+            val dataVarsDict = builtins.callAttr("dict")
             for ((key, value) in dataVariables) {
-                execDict.put(key, value)
+                dataVarsDict.put(key, value)
             }
 
             // Capture stdout and stderr
@@ -94,7 +109,8 @@ safe_builtins.open = None
             sys["stderr"] = stderrCapture
 
             try {
-                builtins.callAttr("exec", script, execDict)
+                // Execute the script via our Python wrapper
+                runScript.call(script, dataVarsDict)
             } finally {
                 // Always restore original stdout/stderr
                 sys["stdout"] = origStdout

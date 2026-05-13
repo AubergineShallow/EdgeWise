@@ -31,13 +31,17 @@ import com.localinsight.dataanalyzer.data.DataIngestion
 import com.localinsight.dataanalyzer.llm.LlmPipeline
 import com.localinsight.dataanalyzer.modelmanager.ModelManager
 import com.localinsight.dataanalyzer.python.PythonExecutor
+import com.localinsight.dataanalyzer.charts.PieChart
+import com.localinsight.dataanalyzer.charts.HeatmapChart
 import com.patrykandpatrick.vico.compose.axis.horizontal.rememberBottomAxis
 import com.patrykandpatrick.vico.compose.axis.vertical.rememberStartAxis
 import com.patrykandpatrick.vico.compose.chart.Chart
 import com.patrykandpatrick.vico.compose.chart.column.columnChart
+import com.patrykandpatrick.vico.compose.chart.line.lineChart
 import com.patrykandpatrick.vico.core.entry.FloatEntry
 import com.patrykandpatrick.vico.core.entry.entryModelOf
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
@@ -434,42 +438,109 @@ fun DataAnalyzerScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Chart
-                    var chartLabels by remember(state.executionOutput) { mutableStateOf<List<String>>(emptyList()) }
-                    val chartModel = remember(state.executionOutput) {
+                    // Chart rendering — supports bar, line, pie, histogram, heatmap
+                    val chartData = remember(state.executionOutput) {
                         try {
                             val json = JSONObject(state.executionOutput)
-                            val values = json.optJSONArray("values")
+                            val chartType = json.optString("chart_type", "bar")
                             val labelsArray = json.optJSONArray("labels")
-                            
-                            if (values != null && values.length() > 0) {
-                                val entries = mutableListOf<FloatEntry>()
-                                val parsedLabels = mutableListOf<String>()
-                                
-                                for (i in 0 until values.length()) {
-                                    entries.add(FloatEntry(i.toFloat(), values.getDouble(i).toFloat()))
-                                    parsedLabels.add(labelsArray?.optString(i) ?: i.toString())
+                            val parsedLabels = mutableListOf<String>()
+                            if (labelsArray != null) {
+                                for (i in 0 until labelsArray.length()) {
+                                    parsedLabels.add(labelsArray.getString(i))
                                 }
-                                chartLabels = parsedLabels
-                                entryModelOf(entries)
-                            } else null
+                            }
+
+                            when (chartType) {
+                                "heatmap" -> {
+                                    // values is a 2D array for heatmap
+                                    val valuesArray = json.optJSONArray("values")
+                                    if (valuesArray != null && valuesArray.length() > 0) {
+                                        val matrix = mutableListOf<List<Float>>()
+                                        for (i in 0 until valuesArray.length()) {
+                                            val row = valuesArray.getJSONArray(i)
+                                            val rowList = mutableListOf<Float>()
+                                            for (j in 0 until row.length()) {
+                                                rowList.add(row.getDouble(j).toFloat())
+                                            }
+                                            matrix.add(rowList)
+                                        }
+                                        Triple("heatmap", matrix as Any, parsedLabels)
+                                    } else null
+                                }
+                                else -> {
+                                    // 1D values for bar, line, pie, histogram
+                                    val valuesArray = json.optJSONArray("values")
+                                    if (valuesArray != null && valuesArray.length() > 0) {
+                                        val values = mutableListOf<Float>()
+                                        for (i in 0 until valuesArray.length()) {
+                                            values.add(valuesArray.getDouble(i).toFloat())
+                                        }
+                                        Triple(chartType, values as Any, parsedLabels)
+                                    } else null
+                                }
+                            }
                         } catch (e: Exception) { null }
                     }
 
-                    if (chartModel != null) {
+                    if (chartData != null) {
+                        val (chartType, data, labels) = chartData
                         Text("Generated Chart", style = MaterialTheme.typography.titleMedium)
-                        
-                        val bottomAxisValueFormatter = com.patrykandpatrick.vico.core.axis.formatter.AxisValueFormatter<com.patrykandpatrick.vico.core.axis.AxisPosition.Horizontal.Bottom> { value, _ ->
-                            chartLabels.getOrNull(value.toInt()) ?: value.toString()
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        when (chartType) {
+                            "pie" -> {
+                                @Suppress("UNCHECKED_CAST")
+                                val values = data as List<Float>
+                                PieChart(
+                                    values = values,
+                                    labels = labels,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            "heatmap" -> {
+                                @Suppress("UNCHECKED_CAST")
+                                val matrix = data as List<List<Float>>
+                                HeatmapChart(
+                                    matrix = matrix,
+                                    labels = labels,
+                                    modifier = Modifier.fillMaxWidth().height(300.dp)
+                                )
+                            }
+                            "line" -> {
+                                @Suppress("UNCHECKED_CAST")
+                                val values = data as List<Float>
+                                val entries = values.mapIndexed { i, v -> FloatEntry(i.toFloat(), v) }
+                                val model = entryModelOf(entries)
+                                val bottomFmt = com.patrykandpatrick.vico.core.axis.formatter.AxisValueFormatter<
+                                    com.patrykandpatrick.vico.core.axis.AxisPosition.Horizontal.Bottom
+                                > { value, _ -> labels.getOrNull(value.toInt()) ?: value.toString() }
+                                Chart(
+                                    chart = lineChart(),
+                                    model = model,
+                                    startAxis = rememberStartAxis(),
+                                    bottomAxis = rememberBottomAxis(valueFormatter = bottomFmt),
+                                    modifier = Modifier.height(250.dp)
+                                )
+                            }
+                            else -> {
+                                // bar, histogram, or any fallback
+                                @Suppress("UNCHECKED_CAST")
+                                val values = data as List<Float>
+                                val entries = values.mapIndexed { i, v -> FloatEntry(i.toFloat(), v) }
+                                val model = entryModelOf(entries)
+                                val bottomFmt = com.patrykandpatrick.vico.core.axis.formatter.AxisValueFormatter<
+                                    com.patrykandpatrick.vico.core.axis.AxisPosition.Horizontal.Bottom
+                                > { value, _ -> labels.getOrNull(value.toInt()) ?: value.toString() }
+                                Chart(
+                                    chart = columnChart(),
+                                    model = model,
+                                    startAxis = rememberStartAxis(),
+                                    bottomAxis = rememberBottomAxis(valueFormatter = bottomFmt),
+                                    modifier = Modifier.height(250.dp)
+                                )
+                            }
                         }
-                        
-                        Chart(
-                            chart = columnChart(),
-                            model = chartModel,
-                            startAxis = rememberStartAxis(),
-                            bottomAxis = rememberBottomAxis(valueFormatter = bottomAxisValueFormatter),
-                            modifier = Modifier.height(250.dp)
-                        )
                     } else {
                         Card(
                             modifier = Modifier.fillMaxWidth(),

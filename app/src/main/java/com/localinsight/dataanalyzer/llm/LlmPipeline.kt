@@ -24,6 +24,7 @@ class LlmPipeline(
 ) {
     private val TAG = "LlmPipeline"
     private var engine: Engine? = null
+    private val templateSelector = TemplateSelector()
 
     companion object {
         private const val MAX_COMPILE_RETRIES = 3
@@ -452,7 +453,8 @@ SUGGESTION 3: [Short Title] | [One sentence description]
 
     private suspend fun generateAndValidateCode() {
         try {
-            var pythonCode = generateCode(currentAnalysisDescription)
+            // ── Try template-based generation first ──
+            var pythonCode = generateFromTemplateOrFreeform(currentAnalysisDescription)
             var executionLog = StringBuilder()
 
             // Save the generated script so the user can access/share it
@@ -579,13 +581,64 @@ SUGGESTION 3: [Short Title] | [One sentence description]
         }
     }
 
-    private suspend fun generateCode(analysisDescription: String): String {
+    /**
+     * Try template-based generation first. If no template matches or the template
+     * rendering fails, fall back to freeform LLM code generation.
+     */
+    private suspend fun generateFromTemplateOrFreeform(analysisDescription: String): String {
+        val columnNames = extractColumnNames()
+        val columnTypes = classifyColumns()
+
+        // Layer 1: Keyword-based template matching
+        val match = templateSelector.classify(analysisDescription, columnNames, columnTypes)
+
+        if (match != null) {
+            Log.d(TAG, "Template matched: ${match.template.id} (score=${match.score})")
+
+            // Layer 2: Fill in missing params via short LLM prompt
+            val allParams = mutableMapOf<String, String>()
+            allParams.putAll(match.inferredParams)
+
+            val extractionPrompt = templateSelector.buildParamExtractionPrompt(
+                match.template, analysisDescription, columnNames, columnTypes, allParams
+            )
+
+            if (extractionPrompt != null) {
+                val paramResponse = generateResponse(extractionPrompt)
+                val llmParams = templateSelector.parseParamResponse(
+                    paramResponse, match.template.requiredParams
+                )
+                allParams.putAll(llmParams)
+            }
+
+            // Render the template
+            val rendered = match.template.render(allParams)
+            if (rendered != null) {
+                Log.d(TAG, "Template rendered successfully with params: $allParams")
+                _pipelineState.value = PipelineState.Streaming(
+                    stepName = "Generating Analysis Script",
+                    stepNumber = 4,
+                    partialText = "Using template: ${match.template.name}\n\n$rendered"
+                )
+                return rendered
+            }
+
+            Log.w(TAG, "Template render failed (missing params: ${match.template.requiredParams - allParams.keys}), falling back to freeform")
+        } else {
+            Log.d(TAG, "No template match, using freeform generation")
+        }
+
+        // Layer 3: Freeform fallback
+        return generateCodeFreeform(analysisDescription)
+    }
+
+    private suspend fun generateCodeFreeform(analysisDescription: String): String {
         val codePrompt = """
 Write a short Python script for this data analysis task.
 
 TASK: $analysisDescription
 
-DATA ACCESS: The variable DATA_CSV is ALREADY DEFINED in the global scope. It contains the FULL CSV file (1200+ rows). Do NOT redefine or reassign DATA_CSV. Just use it directly:
+DATA ACCESS: The variable DATA_CSV is ALREADY DEFINED in the global scope. Do NOT redefine it. Load with:
   import pandas as pd
   from io import StringIO
   df = pd.read_csv(StringIO(DATA_CSV))
@@ -597,8 +650,8 @@ RULES:
 1. DATA_CSV is already defined. Do NOT write DATA_CSV = anything. Just read it.
 2. AVAILABLE: pandas, numpy, json, io, math, statistics, collections, re, datetime, csv.
 3. NOT INSTALLED (will crash if imported): scipy, sklearn, matplotlib, seaborn, plotly.
-4. The chart MUST contain MULTIPLE data points. Do NOT just calculate a single number (like a correlation coefficient). Instead, group or bin the data (e.g. df.groupby) and calculate the mean/sum to show a trend across multiple categories.
-5. Print exactly ONE line: a JSON object with a "values" key (list of numbers) and a "labels" key (list of strings). The lists MUST have at least 3 items.
+4. The chart MUST contain MULTIPLE data points. Group or bin the data (e.g. df.groupby).
+5. Print exactly ONE line: a JSON object with "values" (list of numbers), "labels" (list of strings), and "chart_type" (one of: bar, line, pie, histogram, heatmap).
 6. Keep the script under 30 lines total. No comments needed.
 7. Do NOT use open() to read files.
 
@@ -607,11 +660,35 @@ Respond ONLY with the Python code inside a ```python ``` block.
 
         val rawResponse = streamResponse(codePrompt, "Generating Analysis Script", 4)
 
-        // Extract code from markdown code block
         val codeRegex = Regex("```python\\s*([\\s\\S]*?)\\s*```")
         val matchResult = codeRegex.find(rawResponse)
         val code = matchResult?.groupValues?.get(1)?.trim() ?: rawResponse.trim()
         return sanitizeCode(code)
+    }
+
+    // ────────────────────────────────────────────
+    //  Column Helpers
+    // ────────────────────────────────────────────
+
+    private fun extractColumnNames(): List<String> {
+        val firstLine = cachedFileContent.lineSequence().firstOrNull() ?: return emptyList()
+        return firstLine.split(",").map { it.trim() }
+    }
+
+    private fun classifyColumns(): Map<String, String> {
+        val lines = cachedFileContent.lines()
+        if (lines.size < 2) return emptyMap()
+        val headers = lines[0].split(",").map { it.trim() }
+        val sampleRows = lines.drop(1).take(5) // Check first 5 data rows
+
+        return headers.mapIndexed { index, header ->
+            val sampleValues = sampleRows.mapNotNull { row ->
+                row.split(",").getOrNull(index)?.trim()
+            }
+            val numericCount = sampleValues.count { it.toDoubleOrNull() != null }
+            val type = if (numericCount > sampleValues.size / 2) "numeric" else "categorical"
+            header to type
+        }.toMap()
     }
 
     /**

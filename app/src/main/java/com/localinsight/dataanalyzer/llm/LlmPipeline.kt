@@ -133,12 +133,13 @@ You help users understand and analyze tabular data files (CSV, Excel).
 STRICT RULES:
 1. You can ONLY work with data that exists in the columns provided in the schema.
 2. You must NEVER fabricate column names, data points, or relationships that do not exist.
-3. When generating Python code, use pandas, numpy, json, io, math, statistics, collections, re, datetime, csv, and their dependencies.
-4. BLOCKED modules (will cause ImportError): os, subprocess, shutil, socket, http, urllib, requests, ctypes, signal, multiprocessing, pathlib, importlib.
-5. All Python scripts MUST print their final result to stdout as a valid JSON string.
-6. The JSON output MUST contain a "values" key with a list of numbers suitable for charting.
-7. Keep responses concise. You are running on a resource-constrained edge device.
-8. When asked to think step by step, show your reasoning clearly before giving the final answer.
+3. AVAILABLE Python libraries: pandas, numpy, json, io, math, statistics, collections, re, datetime, csv.
+4. NOT INSTALLED (will crash): scipy, sklearn, matplotlib, seaborn, plotly. Do NOT import these.
+5. BLOCKED modules: subprocess, shutil, socket, http, urllib, requests, ctypes, signal, multiprocessing, importlib.
+6. All Python scripts MUST print their final result to stdout as a valid JSON string.
+7. The JSON output MUST contain a "values" key with a list of numbers suitable for charting.
+8. Keep code SHORT (under 40 lines). You are on a resource-constrained edge device with limited token output.
+9. When asked to think step by step, show your reasoning clearly before giving the final answer.
 """.trimIndent()
 
     // ────────────────────────────────────────────
@@ -580,34 +581,28 @@ SUGGESTION 3: [Short Title] | [One sentence description]
 
     private suspend fun generateCode(analysisDescription: String): String {
         val codePrompt = """
-Think step by step to write a Python data analysis script.
+Write a short Python script for this data analysis task.
 
 TASK: $analysisDescription
 
-DATA ACCESS: A string variable called DATA_CSV is already pre-loaded in the script's global scope. It contains the full CSV file content. To load it into a DataFrame, use:
+DATA ACCESS: A string variable called DATA_CSV is pre-loaded. Load it with:
   import pandas as pd
   from io import StringIO
   df = pd.read_csv(StringIO(DATA_CSV))
 
-Do NOT simulate, fabricate, or hardcode any data. You MUST use the DATA_CSV variable to read the real data.
-
 SCHEMA:
 $cachedSchema
 
-INSTRUCTIONS:
-1. First, plan what pandas operations are needed for this analysis.
-2. Then write the complete Python script.
-3. The script MUST start by loading the real data from DATA_CSV using pd.read_csv(StringIO(DATA_CSV)).
-4. Use pandas, numpy, json, io, math, statistics, and their standard dependencies.
-5. BLOCKED modules (will crash): os, subprocess, shutil, socket, http, urllib, requests, ctypes, matplotlib, pathlib.
-6. The script MUST print exactly ONE line to stdout: a valid JSON object.
-7. The JSON object MUST have a "values" key containing a list of numbers suitable for a bar chart.
-8. The JSON object SHOULD also have a "labels" key containing a list of string labels for each bar.
-9. Do NOT use matplotlib or any plotting libraries.
-10. Do NOT use open() to read files. Use DATA_CSV instead.
-11. Do NOT simulate or generate fake data. The real data is in DATA_CSV.
+RULES:
+1. Load data from DATA_CSV. Do NOT simulate or hardcode data.
+2. AVAILABLE: pandas, numpy, json, io, math, statistics, collections, re, datetime, csv.
+3. NOT INSTALLED (will crash if imported): scipy, sklearn, matplotlib, seaborn, plotly.
+4. For correlation, use df.corr() or numpy.corrcoef(). Do NOT use scipy.stats.
+5. Print exactly ONE line: a JSON object with a "values" key (list of numbers) and a "labels" key (list of strings).
+6. Keep the script under 40 lines total. No comments needed.
+7. Do NOT use open() to read files.
 
-Respond ONLY with the Python code inside a ```python ``` block. No other text outside the code block.
+Respond ONLY with the Python code inside a ```python ``` block.
 """.trimIndent()
 
         val rawResponse = streamResponse(codePrompt, "Generating Analysis Script", 4)
@@ -624,7 +619,7 @@ Respond ONLY with the Python code inside a ```python ``` block. No other text ou
         errorType: String
     ): String {
         val correctionPrompt = """
-The Python script you generated has a $errorType error.
+The Python script has a $errorType error.
 
 PREVIOUS CODE:
 ```python
@@ -634,13 +629,13 @@ $previousCode
 ERROR:
 $errorMessage
 
-Fix the script. Remember:
-- The real data is available as a pre-loaded string variable called DATA_CSV. Load it with: df = pd.read_csv(StringIO(DATA_CSV))
-- Do NOT simulate, fabricate, or hardcode data. Use DATA_CSV.
-- Print exactly ONE line of valid JSON to stdout with a "values" key containing a list of numbers.
-- Use pandas, numpy, json, io, math, statistics, and their standard dependencies.
-- BLOCKED modules (will crash): os, subprocess, shutil, socket, http, urllib, requests, ctypes, matplotlib, pathlib.
-- Do NOT use open() or matplotlib.
+Fix the script. Key rules:
+- Load data with: df = pd.read_csv(StringIO(DATA_CSV))
+- AVAILABLE: pandas, numpy, json, io, math, statistics.
+- NOT INSTALLED (do NOT import): scipy, sklearn, matplotlib, seaborn, plotly.
+- For correlation use df.corr() or numpy.corrcoef(), NOT scipy.stats.
+- Print ONE line of JSON with a "values" key (list of numbers) and "labels" key (list of strings).
+- Keep code under 40 lines. No comments.
 
 Respond ONLY with the corrected Python code inside a ```python ``` block.
 """.trimIndent()

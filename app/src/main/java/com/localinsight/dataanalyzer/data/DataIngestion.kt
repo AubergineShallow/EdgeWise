@@ -86,21 +86,36 @@ object DataIngestion {
     }
 
     /**
-     * Read the full file content as a string using ContentResolver.
-     * This is used to inject the actual data into the Python execution context.
+     * Cache the selected data file into the app's internal cache directory.
+     * Creates a new file for each analysis to prevent cache growth (by clearing old ones).
+     * Returns the absolute file path.
      */
-    fun readFullContent(context: Context, uri: Uri): String {
+    fun cacheDataFile(context: Context, uri: Uri): String? {
         return try {
-            val inputStream = context.contentResolver.openInputStream(uri)
-                ?: return ""
-            val reader = BufferedReader(InputStreamReader(inputStream))
-            val content = reader.readText()
-            reader.close()
+            val cacheDir = java.io.File(context.cacheDir, "data_cache")
+            if (!cacheDir.exists()) {
+                cacheDir.mkdirs()
+            } else {
+                // Clear old cached files
+                cacheDir.listFiles()?.forEach { it.delete() }
+            }
+
+            val fileName = getFileName(context, uri)
+            val extension = fileName.substringAfterLast('.', "")
+            val cachedFile = java.io.File(cacheDir, "current_analysis_data.${if (extension.isNotEmpty()) extension else "csv"}")
+
+            val inputStream = context.contentResolver.openInputStream(uri) ?: return null
+            val outputStream = java.io.FileOutputStream(cachedFile)
+
+            inputStream.copyTo(outputStream)
+
             inputStream.close()
-            content
+            outputStream.close()
+
+            cachedFile.absolutePath
         } catch (e: Exception) {
-            Log.e(TAG, "Error reading full file content", e)
-            ""
+            Log.e(TAG, "Error caching data file", e)
+            null
         }
     }
 

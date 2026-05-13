@@ -183,4 +183,18 @@ def run_script(script, data_csv_content):
             )
         }
     }
+
+    /**
+     * Helper to run lightweight background python scripts (e.g., metadata extraction)
+     * returning the raw output string or error.
+     */
+    suspend fun executeBackgroundScript(script: String, filePath: String): String = withContext(Dispatchers.IO) {
+        val result = executeScript(script, filePath)
+        if (result.success) {
+            result.stdout.trim()
+        } else {
+            Log.e(TAG, "Background script failed: ${result.stderr}")
+            "Error: ${result.stderr}"
+        }
+    }
 }

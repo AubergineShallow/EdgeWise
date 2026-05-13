@@ -118,8 +118,13 @@ fun DataAnalyzerScreen(
                 uri?.let {
                     coroutineScope.launch {
                         llmPipeline.initialize()
-                        val metadata = DataIngestion.extractMetadata(context, it)
-                        llmPipeline.runPipeline(metadata, it.toString(), it)
+                        val cachedFilePath = DataIngestion.cacheDataFile(context, it)
+                        if (cachedFilePath != null) {
+                            val metadata = DataIngestion.extractMetadata(context, it)
+                            llmPipeline.runPipeline(metadata, cachedFilePath, it)
+                        } else {
+                            android.widget.Toast.makeText(context, "Failed to load file", android.widget.Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
             }

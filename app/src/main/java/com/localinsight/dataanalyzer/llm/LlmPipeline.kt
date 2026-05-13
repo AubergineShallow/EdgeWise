@@ -119,7 +119,6 @@ class LlmPipeline(
     private var cachedSchema: String = ""
     private var cachedErDiagram: String = ""
     private var cachedDataFilePath: String = ""
-    private var cachedFileContent: String = ""
     private var cachedMetadata: String = ""
     private var currentAnalysisDescription: String = ""
 
@@ -238,7 +237,6 @@ STRICT RULES:
 
         cachedMetadata = metadata
         cachedDataFilePath = dataFilePath
-        cachedFileContent = DataIngestion.readFullContent(context, fileUri)
 
         try {
             // ── Step 1: Schema Profiling (streamed with CoT) ──
@@ -471,7 +469,7 @@ SUGGESTION 3: [Short Title] | [One sentence description]
                     maxAttempts = MAX_COMPILE_RETRIES
                 )
 
-                executionResult = pythonExecutor.executeScript(pythonCode, cachedFileContent)
+                executionResult = pythonExecutor.executeScript(pythonCode, cachedDataFilePath)
                 executionLog.appendLine("── Attempt $compileAttempt ──")
                 executionLog.appendLine("stdout: ${executionResult.stdout}")
                 executionLog.appendLine("stderr: ${executionResult.stderr}")
@@ -548,7 +546,7 @@ SUGGESTION 3: [Short Title] | [One sentence description]
                     attempt = compileAttempt,
                     maxAttempts = MAX_COMPILE_RETRIES
                 )
-                executionResult = pythonExecutor.executeScript(pythonCode, cachedFileContent)
+                executionResult = pythonExecutor.executeScript(pythonCode, cachedDataFilePath)
                 executionLog.appendLine("── Output fix attempt $outputAttempt ──")
                 executionLog.appendLine("stdout: ${executionResult.stdout}")
                 executionLog.appendLine("stderr: ${executionResult.stderr}")
@@ -670,25 +668,45 @@ Respond ONLY with the Python code inside a ```python ``` block.
     //  Column Helpers
     // ────────────────────────────────────────────
 
-    private fun extractColumnNames(): List<String> {
-        val firstLine = cachedFileContent.lineSequence().firstOrNull() ?: return emptyList()
-        return firstLine.split(",").map { it.trim() }
+    private suspend fun extractColumnNames(): List<String> {
+        val script = """
+import pandas as pd
+import json
+df = load_data()
+print(json.dumps(df.columns.tolist()))
+""".trimIndent()
+        val output = pythonExecutor.executeBackgroundScript(script, cachedDataFilePath)
+        return try {
+            val arr = org.json.JSONArray(output)
+            List(arr.length()) { arr.getString(it) }
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
-    private fun classifyColumns(): Map<String, String> {
-        val lines = cachedFileContent.lines()
-        if (lines.size < 2) return emptyMap()
-        val headers = lines[0].split(",").map { it.trim() }
-        val sampleRows = lines.drop(1).take(5) // Check first 5 data rows
-
-        return headers.mapIndexed { index, header ->
-            val sampleValues = sampleRows.mapNotNull { row ->
-                row.split(",").getOrNull(index)?.trim()
-            }
-            val numericCount = sampleValues.count { it.toDoubleOrNull() != null }
-            val type = if (numericCount > sampleValues.size / 2) "numeric" else "categorical"
-            header to type
-        }.toMap()
+    private suspend fun classifyColumns(): Map<String, String> {
+        val script = """
+import pandas as pd
+import numpy as np
+import json
+df = load_data()
+result = {}
+for col in df.columns:
+    if pd.api.types.is_numeric_dtype(df[col]):
+        result[col] = "numeric"
+    else:
+        result[col] = "categorical"
+print(json.dumps(result))
+""".trimIndent()
+        val output = pythonExecutor.executeBackgroundScript(script, cachedDataFilePath)
+        return try {
+            val obj = org.json.JSONObject(output)
+            val map = mutableMapOf<String, String>()
+            obj.keys().forEach { map[it] = obj.getString(it) }
+            map
+        } catch (e: Exception) {
+            emptyMap()
+        }
     }
 
     /**

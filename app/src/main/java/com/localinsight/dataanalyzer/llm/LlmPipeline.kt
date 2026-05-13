@@ -99,10 +99,11 @@ class LlmPipeline(
             val analysisDescription: String,
             val code: String,
             val executionOutput: String,
-            val executionLog: String
+            val executionLog: String,
+            val scriptPath: String? = null
         ) : PipelineState()
 
-        data class Error(val message: String) : PipelineState()
+        data class Error(val message: String, val scriptPath: String? = null) : PipelineState()
     }
 
     data class AnalysisSuggestion(
@@ -452,6 +453,9 @@ SUGGESTION 3: [Short Title] | [One sentence description]
             var pythonCode = generateCode(currentAnalysisDescription)
             var executionLog = StringBuilder()
 
+            // Save the generated script so the user can access/share it
+            val scriptPath = pythonExecutor.saveScriptToFile(pythonCode, "generated")
+
             // ── Compile/Runtime retry loop (max 3 attempts) ──
             var compileAttempt = 0
             var executionResult: ExecutionResult
@@ -463,7 +467,7 @@ SUGGESTION 3: [Short Title] | [One sentence description]
                     maxAttempts = MAX_COMPILE_RETRIES
                 )
 
-                executionResult = pythonExecutor.executeScript(pythonCode, mapOf("DATA_CSV" to cachedFileContent))
+                executionResult = pythonExecutor.executeScript(pythonCode, cachedFileContent)
                 executionLog.appendLine("── Attempt $compileAttempt ──")
                 executionLog.appendLine("stdout: ${executionResult.stdout}")
                 executionLog.appendLine("stderr: ${executionResult.stderr}")
@@ -492,6 +496,7 @@ SUGGESTION 3: [Short Title] | [One sentence description]
 
                 // Feed error back to model for self-correction
                 pythonCode = selfCorrectCode(pythonCode, executionResult.stderr, "runtime")
+                pythonExecutor.saveScriptToFile(pythonCode, "retry_$compileAttempt")
             }
 
             // ── Output validation retry loop (max 2 attempts) ──
@@ -539,7 +544,7 @@ SUGGESTION 3: [Short Title] | [One sentence description]
                     attempt = compileAttempt,
                     maxAttempts = MAX_COMPILE_RETRIES
                 )
-                executionResult = pythonExecutor.executeScript(pythonCode, mapOf("DATA_CSV" to cachedFileContent))
+                executionResult = pythonExecutor.executeScript(pythonCode, cachedFileContent)
                 executionLog.appendLine("── Output fix attempt $outputAttempt ──")
                 executionLog.appendLine("stdout: ${executionResult.stdout}")
                 executionLog.appendLine("stderr: ${executionResult.stderr}")
@@ -562,7 +567,8 @@ SUGGESTION 3: [Short Title] | [One sentence description]
                 analysisDescription = currentAnalysisDescription,
                 code = pythonCode,
                 executionOutput = validOutput,
-                executionLog = executionLog.toString()
+                executionLog = executionLog.toString(),
+                scriptPath = scriptPath
             )
 
         } catch (e: Exception) {

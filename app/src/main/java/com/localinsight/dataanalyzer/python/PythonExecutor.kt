@@ -1,12 +1,17 @@
 package com.localinsight.dataanalyzer.python
 
 import android.content.Context
+import android.os.Environment
 import android.util.Log
 import com.chaquo.python.PyException
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 data class ExecutionResult(
     val stdout: String,
@@ -31,13 +36,34 @@ class PythonExecutor(private val context: Context) {
     }
 
     /**
-     * Execute a Python script with optional pre-loaded data variables.
-     * Variables in [dataVariables] are injected into the script's global dict
-     * so the LLM-generated code can reference actual file data without reading files.
+     * Save the generated script to the app's external Documents directory
+     * so the user can access and share it for debugging.
+     * Returns the file path, or null on failure.
+     */
+    fun saveScriptToFile(script: String, label: String = "analysis"): String? {
+        return try {
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            val fileName = "edgewise_${label}_$timestamp.py"
+            val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
+                ?: return null
+            if (!dir.exists()) dir.mkdirs()
+            val file = File(dir, fileName)
+            file.writeText(script)
+            Log.d(TAG, "Script saved to: ${file.absolutePath}")
+            file.absolutePath
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to save script", e)
+            null
+        }
+    }
+
+    /**
+     * Execute a Python script with an optional pre-loaded CSV data string.
+     * The CSV content is injected as a global variable called DATA_CSV.
      */
     suspend fun executeScript(
         script: String,
-        dataVariables: Map<String, String> = emptyMap()
+        dataCsvContent: String = ""
     ): ExecutionResult = withContext(Dispatchers.IO) {
         try {
             val py = Python.getInstance()
@@ -46,9 +72,12 @@ class PythonExecutor(private val context: Context) {
             val globalDict = builtins.callAttr("dict")
 
             // We use a Python wrapper function to handle the execution.
-            // This safely patches the global builtins.__import__ and builtins.open 
-            // only for the duration of the script, avoiding Chaquopy compatibility issues 
+            // This safely patches the global builtins.__import__ and builtins.open
+            // only for the duration of the script, avoiding Chaquopy compatibility issues
             // with custom __builtins__ objects.
+            //
+            // DATA_CSV is passed as a direct string argument to avoid Chaquopy dict
+            // interop issues (dict.update with a Chaquopy-constructed dict fails).
             val wrapperCode = """
 import builtins
 import sys
@@ -64,24 +93,21 @@ def _safe_import(name, *args, **kwargs):
     return _original_import(name, *args, **kwargs)
 
 def _safe_open(file, *args, **kwargs):
-    # Allow reading from Chaquopy asset paths or internal python lib paths,
-    # but block arbitrary file reading by the LLM.
     if isinstance(file, str) and ("chaquopy" in file or "/data/user" in file):
         return _original_open(file, *args, **kwargs)
     raise IOError(f"File access to '{file}' is restricted.")
 
-def run_script(script, data_vars):
+def run_script(script, data_csv_content):
     exec_dict = {"__name__": "__main__"}
-    exec_dict.update(data_vars)
+    if data_csv_content:
+        exec_dict["DATA_CSV"] = data_csv_content
     
-    # Patch globally
     builtins.__import__ = _safe_import
     builtins.open = _safe_open
     
     try:
         exec(script, exec_dict)
     finally:
-        # Always restore globally
         builtins.__import__ = _original_import
         builtins.open = _original_open
 """.trimIndent()
@@ -89,12 +115,6 @@ def run_script(script, data_vars):
             // Define the wrapper function
             builtins.callAttr("exec", wrapperCode, globalDict)
             val runScript = globalDict.callAttr("get", "run_script")
-
-            // Convert Kotlin dataVariables map to Python dict
-            val dataVarsDict = builtins.callAttr("dict")
-            for ((key, value) in dataVariables) {
-                dataVarsDict.put(key, value)
-            }
 
             // Capture stdout and stderr
             val sys = py.getModule("sys")
@@ -109,8 +129,8 @@ def run_script(script, data_vars):
             sys["stderr"] = stderrCapture
 
             try {
-                // Execute the script via our Python wrapper
-                runScript.call(script, dataVarsDict)
+                // Execute the script, passing DATA_CSV as a direct string argument
+                runScript.call(script, dataCsvContent)
             } finally {
                 // Always restore original stdout/stderr
                 sys["stdout"] = origStdout

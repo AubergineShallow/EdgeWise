@@ -133,11 +133,12 @@ You help users understand and analyze tabular data files (CSV, Excel).
 STRICT RULES:
 1. You can ONLY work with data that exists in the columns provided in the schema.
 2. You must NEVER fabricate column names, data points, or relationships that do not exist.
-3. When generating Python code, you must ONLY use: pandas, numpy, json, io, math, statistics, collections, re, datetime, csv.
-4. All Python scripts MUST print their final result to stdout as a valid JSON string.
-5. The JSON output MUST contain a "values" key with a list of numbers suitable for charting.
-6. Keep responses concise. You are running on a resource-constrained edge device.
-7. When asked to think step by step, show your reasoning clearly before giving the final answer.
+3. When generating Python code, use pandas, numpy, json, io, math, statistics, collections, re, datetime, csv, and their dependencies.
+4. BLOCKED modules (will cause ImportError): os, subprocess, shutil, socket, http, urllib, requests, ctypes, signal, multiprocessing, pathlib, importlib.
+5. All Python scripts MUST print their final result to stdout as a valid JSON string.
+6. The JSON output MUST contain a "values" key with a list of numbers suitable for charting.
+7. Keep responses concise. You are running on a resource-constrained edge device.
+8. When asked to think step by step, show your reasoning clearly before giving the final answer.
 """.trimIndent()
 
     // ────────────────────────────────────────────
@@ -597,13 +598,14 @@ INSTRUCTIONS:
 1. First, plan what pandas operations are needed for this analysis.
 2. Then write the complete Python script.
 3. The script MUST start by loading the real data from DATA_CSV using pd.read_csv(StringIO(DATA_CSV)).
-4. The script MUST use only: pandas, numpy, json, io, math, statistics, collections, re, datetime, csv.
-5. The script MUST print exactly ONE line to stdout: a valid JSON object.
-6. The JSON object MUST have a "values" key containing a list of numbers suitable for a bar chart.
-7. The JSON object SHOULD also have a "labels" key containing a list of string labels for each bar.
-8. Do NOT use matplotlib or any plotting libraries.
-9. Do NOT use open() to read files. Use DATA_CSV instead.
-10. Do NOT simulate or generate fake data. The real data is in DATA_CSV.
+4. Use pandas, numpy, json, io, math, statistics, and their standard dependencies.
+5. BLOCKED modules (will crash): os, subprocess, shutil, socket, http, urllib, requests, ctypes, matplotlib, pathlib.
+6. The script MUST print exactly ONE line to stdout: a valid JSON object.
+7. The JSON object MUST have a "values" key containing a list of numbers suitable for a bar chart.
+8. The JSON object SHOULD also have a "labels" key containing a list of string labels for each bar.
+9. Do NOT use matplotlib or any plotting libraries.
+10. Do NOT use open() to read files. Use DATA_CSV instead.
+11. Do NOT simulate or generate fake data. The real data is in DATA_CSV.
 
 Respond ONLY with the Python code inside a ```python ``` block. No other text outside the code block.
 """.trimIndent()
@@ -636,7 +638,8 @@ Fix the script. Remember:
 - The real data is available as a pre-loaded string variable called DATA_CSV. Load it with: df = pd.read_csv(StringIO(DATA_CSV))
 - Do NOT simulate, fabricate, or hardcode data. Use DATA_CSV.
 - Print exactly ONE line of valid JSON to stdout with a "values" key containing a list of numbers.
-- Only use allowed modules: pandas, numpy, json, io, math, statistics, collections, re, datetime, csv.
+- Use pandas, numpy, json, io, math, statistics, and their standard dependencies.
+- BLOCKED modules (will crash): os, subprocess, shutil, socket, http, urllib, requests, ctypes, matplotlib, pathlib.
 - Do NOT use open() or matplotlib.
 
 Respond ONLY with the corrected Python code inside a ```python ``` block.

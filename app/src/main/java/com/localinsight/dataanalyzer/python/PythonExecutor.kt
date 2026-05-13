@@ -1,14 +1,16 @@
 package com.localinsight.dataanalyzer.python
 
+import android.content.ContentValues
 import android.content.Context
+import android.os.Build
 import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import com.chaquo.python.PyException
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -22,11 +24,19 @@ data class ExecutionResult(
 class PythonExecutor(private val context: Context) {
     private val TAG = "PythonExecutor"
 
-    // Modules the LLM-generated scripts are allowed to import
-    private val ALLOWED_MODULES = setOf(
-        "pandas", "numpy", "json", "io", "math", "statistics",
-        "collections", "re", "datetime", "csv", "functools",
-        "itertools", "operator", "string", "textwrap"
+    // Dangerous modules that must NEVER be importable by LLM-generated code.
+    // Everything else (stdlib + pandas/numpy transitive deps) is allowed.
+    private val BLOCKED_MODULES = setOf(
+        "os", "subprocess", "shutil", "pathlib",           // filesystem / process
+        "socket", "http", "urllib", "requests",             // network
+        "ftplib", "smtplib", "telnetlib", "xmlrpc",         // network protocols
+        "webbrowser", "antigravity",                        // browser launch
+        "tkinter", "turtle",                                // GUI (not available anyway)
+        "signal", "multiprocessing", "_thread",             // process/thread control
+        "ctypes", "cffi",                                   // native FFI
+        "importlib", "runpy",                               // import system manipulation
+        "code", "codeop", "compileall", "py_compile",       // code compilation
+        "ensurepip", "pip", "setuptools", "distutils"       // package management
     )
 
     init {
@@ -36,21 +46,45 @@ class PythonExecutor(private val context: Context) {
     }
 
     /**
-     * Save the generated script to the app's external Documents directory
-     * so the user can access and share it for debugging.
-     * Returns the file path, or null on failure.
+     * Save the generated script to the public Downloads/EdgeWise directory
+     * using MediaStore so it's visible in any file manager.
+     * Returns the display path, or null on failure.
      */
     fun saveScriptToFile(script: String, label: String = "analysis"): String? {
         return try {
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val fileName = "edgewise_${label}_$timestamp.py"
-            val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
-                ?: return null
-            if (!dir.exists()) dir.mkdirs()
-            val file = File(dir, fileName)
-            file.writeText(script)
-            Log.d(TAG, "Script saved to: ${file.absolutePath}")
-            file.absolutePath
+            val displayPath = "Download/EdgeWise/$fileName"
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Android 10+: use MediaStore
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                    put(MediaStore.Downloads.MIME_TYPE, "text/x-python")
+                    put(MediaStore.Downloads.RELATIVE_PATH, "Download/EdgeWise")
+                }
+                val uri = context.contentResolver.insert(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                ) ?: return null
+
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(script.toByteArray())
+                }
+                Log.d(TAG, "Script saved via MediaStore: $displayPath")
+            } else {
+                // Older Android: write directly
+                @Suppress("DEPRECATION")
+                val dir = java.io.File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                    "EdgeWise"
+                )
+                if (!dir.exists()) dir.mkdirs()
+                val file = java.io.File(dir, fileName)
+                file.writeText(script)
+                Log.d(TAG, "Script saved to: ${file.absolutePath}")
+            }
+
+            displayPath
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save script", e)
             null
@@ -60,6 +94,9 @@ class PythonExecutor(private val context: Context) {
     /**
      * Execute a Python script with an optional pre-loaded CSV data string.
      * The CSV content is injected as a global variable called DATA_CSV.
+     *
+     * Security: instead of an allowlist (which breaks pandas/numpy transitive imports),
+     * we use a DENYLIST of explicitly dangerous modules.
      */
     suspend fun executeScript(
         script: String,
@@ -71,29 +108,29 @@ class PythonExecutor(private val context: Context) {
 
             val globalDict = builtins.callAttr("dict")
 
-            // We use a Python wrapper function to handle the execution.
-            // This safely patches the global builtins.__import__ and builtins.open
-            // only for the duration of the script, avoiding Chaquopy compatibility issues
-            // with custom __builtins__ objects.
+            // Python wrapper that temporarily patches builtins.__import__ and builtins.open
+            // with safety checks, runs the script, then restores originals.
             //
-            // DATA_CSV is passed as a direct string argument to avoid Chaquopy dict
-            // interop issues (dict.update with a Chaquopy-constructed dict fails).
+            // Uses a DENYLIST approach: block only dangerous modules.
+            // This allows pandas/numpy and all their transitive stdlib dependencies
+            // (warnings, pytz, dateutil, decimal, numbers, etc.) to import freely.
+            val blockedSet = BLOCKED_MODULES.joinToString(", ") { "'$it'" }
             val wrapperCode = """
 import builtins
 import sys
 
-_allowed = ${ALLOWED_MODULES.joinToString(", ") { "'$it'" }.let { "{$it}" }}
+_blocked = {$blockedSet}
 _original_import = builtins.__import__
 _original_open = builtins.open
 
 def _safe_import(name, *args, **kwargs):
     top_level = name.split('.')[0]
-    if top_level not in _allowed and top_level not in sys.builtin_module_names:
-        raise ImportError(f"Import of '{name}' is not allowed. Permitted modules: {sorted(_allowed)}")
+    if top_level in _blocked:
+        raise ImportError(f"Import of '{name}' is blocked for security.")
     return _original_import(name, *args, **kwargs)
 
 def _safe_open(file, *args, **kwargs):
-    if isinstance(file, str) and ("chaquopy" in file or "/data/user" in file):
+    if isinstance(file, str) and ("chaquopy" in file or "/data/" in file):
         return _original_open(file, *args, **kwargs)
     raise IOError(f"File access to '{file}' is restricted.")
 

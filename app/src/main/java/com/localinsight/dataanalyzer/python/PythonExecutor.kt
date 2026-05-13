@@ -7,10 +7,22 @@ import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
+
+data class ExecutionResult(
+    val stdout: String,
+    val stderr: String,
+    val success: Boolean
+)
 
 class PythonExecutor(private val context: Context) {
     private val TAG = "PythonExecutor"
+
+    // Modules the LLM-generated scripts are allowed to import
+    private val ALLOWED_MODULES = setOf(
+        "pandas", "numpy", "json", "io", "math", "statistics",
+        "collections", "re", "datetime", "csv", "functools",
+        "itertools", "operator", "string", "textwrap"
+    )
 
     init {
         if (!Python.isStarted()) {
@@ -18,46 +30,88 @@ class PythonExecutor(private val context: Context) {
         }
     }
 
-    suspend fun executeScript(script: String): String = withContext(Dispatchers.IO) {
+    suspend fun executeScript(script: String): ExecutionResult = withContext(Dispatchers.IO) {
         try {
             val py = Python.getInstance()
-
-            // To sandbox the execution and prevent prompt injection, we execute the script
-            // inside a restricted dictionary that omits __builtins__ with __import__, eval, etc.
             val builtins = py.getBuiltins()
-            val dict = builtins.callAttr("dict")
 
-            val safeBuiltins = builtins.callAttr("dict")
-            // Explicitly remove dangerous builtins
-            safeBuiltins.put("__import__", null)
-            safeBuiltins.put("eval", null)
-            safeBuiltins.put("exec", null)
-            safeBuiltins.put("open", null)
+            // Build a sandboxed global dict for exec()
+            val globalDict = builtins.callAttr("dict")
 
-            dict.put("__builtins__", safeBuiltins)
+            // Create an import allowlist wrapper in Python
+            // This replaces the original approach of nulling out __import__,
+            // which broke ALL imports including pandas/numpy.
+            val allowlistCode = """
+import builtins as _builtins
 
+_original_import = _builtins.__import__
+_allowed = ${ALLOWED_MODULES.joinToString(", ") { "'$it'" }.let { "{$it}" }}
+
+def _safe_import(name, *args, **kwargs):
+    top_level = name.split('.')[0]
+    if top_level not in _allowed:
+        raise ImportError(f"Import of '{name}' is not allowed. Permitted modules: {sorted(_allowed)}")
+    return _original_import(name, *args, **kwargs)
+""".trimIndent()
+
+            // Install the safe import hook
+            builtins.callAttr("exec", allowlistCode, globalDict)
+
+            // Now replace __import__ in the sandbox with our safe version
+            val safeImport = globalDict.callAttr("get", "_safe_import")
+            val sandboxBuiltins = builtins.callAttr("dict", builtins.callAttr("vars", py.getModule("builtins")))
+            sandboxBuiltins.put("__import__", safeImport)
+            sandboxBuiltins.put("open", null)  // Block filesystem access
+            globalDict.put("__builtins__", sandboxBuiltins)
+
+            // Capture stdout and stderr
             val sys = py.getModule("sys")
-            val io = py.getModule("io")
-            val textIOWrapper = io.callAttr("StringIO")
+            val ioModule = py.getModule("io")
+            val stdoutCapture = ioModule.callAttr("StringIO")
+            val stderrCapture = ioModule.callAttr("StringIO")
 
-            sys["stdout"] = textIOWrapper
+            val origStdout = sys["stdout"]
+            val origStderr = sys["stderr"]
 
-            // Execute the raw script within the sandboxed dictionary
-            builtins.callAttr("exec", script, dict)
+            sys["stdout"] = stdoutCapture
+            sys["stderr"] = stderrCapture
 
-            // Retrieve the output
-            val output = textIOWrapper.callAttr("getvalue").toString()
-            Log.d(TAG, "Python execution output: $output")
+            try {
+                builtins.callAttr("exec", script, globalDict)
+            } finally {
+                // Always restore original stdout/stderr
+                sys["stdout"] = origStdout
+                sys["stderr"] = origStderr
+            }
 
-            sys["stdout"] = sys["__stdout__"]
+            val stdout = stdoutCapture.callAttr("getvalue").toString()
+            val stderr = stderrCapture.callAttr("getvalue").toString()
 
-            output
+            Log.d(TAG, "Python stdout: $stdout")
+            if (stderr.isNotEmpty()) {
+                Log.w(TAG, "Python stderr: $stderr")
+            }
+
+            ExecutionResult(
+                stdout = stdout,
+                stderr = stderr,
+                success = true
+            )
+
         } catch (e: PyException) {
             Log.e(TAG, "Python execution failed", e)
-            throw Exception("Python execution failed: ${e.message}")
+            ExecutionResult(
+                stdout = "",
+                stderr = e.message ?: "Unknown Python error",
+                success = false
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Unknown error during Python execution", e)
-            throw Exception("Error during Python execution: ${e.message}")
+            ExecutionResult(
+                stdout = "",
+                stderr = e.message ?: "Unknown execution error",
+                success = false
+            )
         }
     }
 }

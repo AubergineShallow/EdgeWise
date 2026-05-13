@@ -2,7 +2,9 @@ package com.localinsight.dataanalyzer.llm
 
 import android.content.Context
 import android.util.Log
-import com.google.mediapipe.tasks.genai.llminference.LlmInference
+import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Engine
+import com.google.ai.edge.litertlm.EngineConfig
 import com.localinsight.dataanalyzer.modelmanager.ModelManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -12,7 +14,7 @@ import kotlinx.coroutines.withContext
 
 class LlmPipeline(private val context: Context, private val modelManager: ModelManager) {
     private val TAG = "LlmPipeline"
-    private var llmInference: LlmInference? = null
+    private var engine: Engine? = null
 
     private val _pipelineState = MutableStateFlow<PipelineState>(PipelineState.Idle)
     val pipelineState: StateFlow<PipelineState> = _pipelineState.asStateFlow()
@@ -28,7 +30,7 @@ class LlmPipeline(private val context: Context, private val modelManager: ModelM
     }
 
     suspend fun initialize() = withContext(Dispatchers.IO) {
-        if (llmInference != null) return@withContext
+        if (engine != null) return@withContext
         try {
             _pipelineState.value = PipelineState.LoadingModel
             val modelFile = modelManager.getModelFile()
@@ -37,13 +39,13 @@ class LlmPipeline(private val context: Context, private val modelManager: ModelM
                 return@withContext
             }
 
-            val options = LlmInference.LlmInferenceOptions.builder()
-                .setModelPath(modelFile.absolutePath)
-                .setMaxTokens(2048)
-                .setTemperature(0.1f)
-                .build()
+            val config = EngineConfig(
+                modelPath = modelFile.absolutePath,
+                backend = Backend.CPU()
+            )
 
-            llmInference = LlmInference.createFromOptions(context, options)
+            engine = Engine(config)
+            engine!!.initialize()
             _pipelineState.value = PipelineState.Idle
         } catch (e: Exception) {
             Log.e(TAG, "Error initializing LLM", e)
@@ -51,8 +53,18 @@ class LlmPipeline(private val context: Context, private val modelManager: ModelM
         }
     }
 
+    private suspend fun generateResponse(prompt: String): String = withContext(Dispatchers.IO) {
+        val conversation = engine!!.createConversation()
+        try {
+            val response = conversation.sendMessage(prompt)
+            response.toString()
+        } finally {
+            conversation.close()
+        }
+    }
+
     suspend fun runPipeline(metadata: String, dataFilePath: String) = withContext(Dispatchers.IO) {
-        if (llmInference == null) {
+        if (engine == null) {
             _pipelineState.value = PipelineState.Error("LLM not initialized")
             return@withContext
         }
@@ -66,7 +78,7 @@ class LlmPipeline(private val context: Context, private val modelManager: ModelM
 
                 Identify the primary data types for each column, detect missing value patterns, and output a structured schema profile.
             """.trimIndent()
-            val schemaProfile = llmInference!!.generateResponse(schemaPrompt)
+            val schemaProfile = generateResponse(schemaPrompt)
 
             // Step 2: Relational Mapping
             _pipelineState.value = PipelineState.MappingRelations
@@ -74,7 +86,7 @@ class LlmPipeline(private val context: Context, private val modelManager: ModelM
                 Based on the following schema profile, generate a text-based Entity-Relationship (ER) diagram mapping the structural topology:
                 $schemaProfile
             """.trimIndent()
-            val erDiagram = llmInference!!.generateResponse(relationalPrompt)
+            val erDiagram = generateResponse(relationalPrompt)
 
             // Step 3: Code Generation
             _pipelineState.value = PipelineState.GeneratingCode
@@ -90,7 +102,7 @@ class LlmPipeline(private val context: Context, private val modelManager: ModelM
 
                 Respond ONLY with the Python code inside a ```python ``` block.
             """.trimIndent()
-            val rawPythonCode = llmInference!!.generateResponse(codePrompt)
+            val rawPythonCode = generateResponse(codePrompt)
 
             // Safer extraction using Regex
             val codeRegex = Regex("```python\\s*([\\s\\S]*?)\\s*```")

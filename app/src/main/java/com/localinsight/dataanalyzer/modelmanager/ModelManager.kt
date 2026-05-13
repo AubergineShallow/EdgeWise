@@ -8,17 +8,23 @@ import android.content.IntentFilter
 import android.net.Uri
 import android.os.Environment
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.io.File
 
 class ModelManager(private val context: Context) {
     private val TAG = "ModelManager"
+    private val scope = CoroutineScope(Dispatchers.IO + Job())
 
-    // Replace with a valid public URL or authenticated mechanism
-    private val MODEL_URL = "https://example.com/gemma-2b-it-gpu-int4.bin"
-    private val MODEL_FILE_NAME = "gemma-2b-it-gpu-int4.bin"
+    // Ungated LiteRT-LM community model (no auth required)
+    private val MODEL_URL = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
+    private val MODEL_FILE_NAME = "gemma-4-E2B-it.litertlm"
 
     private val _downloadProgress = MutableStateFlow<Float>(0f)
     val downloadProgress: StateFlow<Float> = _downloadProgress.asStateFlow()
@@ -61,22 +67,44 @@ class ModelManager(private val context: Context) {
             val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             downloadId = downloadManager.enqueue(request)
 
-            // Register receiver to listen for completion
-            val onComplete = object : BroadcastReceiver() {
-                override fun onReceive(ctxt: Context?, intent: Intent?) {
-                    val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
-                    if (id == downloadId) {
-                        _downloadStatus.value = DownloadStatus.Completed
-                        _downloadProgress.value = 1f
-                        context.unregisterReceiver(this)
+            scope.launch {
+                var isFinished = false
+                while (!isFinished) {
+                    val query = DownloadManager.Query().setFilterById(downloadId)
+                    val cursor = downloadManager.query(query)
+                    if (cursor != null && cursor.moveToFirst()) {
+                        val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                        if (statusIndex >= 0) {
+                            when (cursor.getInt(statusIndex)) {
+                                DownloadManager.STATUS_SUCCESSFUL -> {
+                                    _downloadStatus.value = DownloadStatus.Completed
+                                    _downloadProgress.value = 1f
+                                    isFinished = true
+                                }
+                                DownloadManager.STATUS_FAILED -> {
+                                    _downloadStatus.value = DownloadStatus.Error("Download failed")
+                                    isFinished = true
+                                }
+                                DownloadManager.STATUS_RUNNING -> {
+                                    val totalIndex = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                                    val downloadedIndex = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                                    if (totalIndex >= 0 && downloadedIndex >= 0) {
+                                        val total = cursor.getLong(totalIndex)
+                                        val downloaded = cursor.getLong(downloadedIndex)
+                                        if (total > 0) {
+                                            _downloadProgress.value = downloaded.toFloat() / total.toFloat()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        cursor.close()
+                    }
+                    if (!isFinished) {
+                        delay(1000)
                     }
                 }
             }
-            context.registerReceiver(onComplete, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), Context.RECEIVER_NOT_EXPORTED)
-
-            // Note: In a production app, we would poll the DownloadManager query to update _downloadProgress.
-            // For simplicity here, we simulate it being in progress until completed.
-            _downloadProgress.value = 0.5f
 
         } catch (e: Exception) {
             Log.e(TAG, "Error initiating model download", e)

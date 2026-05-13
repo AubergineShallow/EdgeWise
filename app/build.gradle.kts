@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
     id("com.chaquo.python")
 }
 
@@ -43,9 +44,7 @@ android {
     buildFeatures {
         compose = true
     }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.14"
-    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -74,8 +73,8 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
 
-    // MediaPipe LLM Inference
-    implementation("com.google.mediapipe:tasks-genai:0.10.14")
+    // LiteRT-LM (replaces deprecated MediaPipe LLM Inference)
+    implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
 
     // Vico compose charting
     implementation("com.patrykandpatrick.vico:compose:1.14.0")

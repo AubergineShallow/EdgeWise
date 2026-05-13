@@ -112,7 +112,7 @@ fun DataAnalyzerScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         if (!modelManager.isModelDownloaded()) {
-            Text("Downloading Gemma 4-bit Model...")
+            Text("Downloading Gemma 4 E2B Model...")
             LinearProgressIndicator(progress = { downloadProgress }, modifier = Modifier.fillMaxWidth())
             Button(onClick = {
                 modelManager.downloadModel()

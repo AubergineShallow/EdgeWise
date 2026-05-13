@@ -597,8 +597,8 @@ RULES:
 1. DATA_CSV is already defined. Do NOT write DATA_CSV = anything. Just read it.
 2. AVAILABLE: pandas, numpy, json, io, math, statistics, collections, re, datetime, csv.
 3. NOT INSTALLED (will crash if imported): scipy, sklearn, matplotlib, seaborn, plotly.
-4. For correlation, use df.corr() or numpy.corrcoef(). Do NOT use scipy.stats.
-5. Print exactly ONE line: a JSON object with a "values" key (list of numbers) and a "labels" key (list of strings).
+4. The chart MUST contain MULTIPLE data points. Do NOT just calculate a single number (like a correlation coefficient). Instead, group or bin the data (e.g. df.groupby) and calculate the mean/sum to show a trend across multiple categories.
+5. Print exactly ONE line: a JSON object with a "values" key (list of numbers) and a "labels" key (list of strings). The lists MUST have at least 3 items.
 6. Keep the script under 30 lines total. No comments needed.
 7. Do NOT use open() to read files.
 
@@ -662,8 +662,8 @@ Fix the script. Key rules:
 - DATA_CSV is ALREADY DEFINED. Do NOT redefine it. Just use: df = pd.read_csv(StringIO(DATA_CSV))
 - AVAILABLE: pandas, numpy, json, io, math, statistics.
 - NOT INSTALLED (do NOT import): scipy, sklearn, matplotlib, seaborn, plotly.
-- For correlation use df.corr() or numpy.corrcoef(), NOT scipy.stats.
-- Print ONE line of JSON with a "values" key (list of numbers) and "labels" key (list of strings).
+- The chart MUST contain MULTIPLE data points (e.g. df.groupby). Do NOT just output a single number like a correlation coefficient.
+- Print ONE line of JSON with a "values" key (list of numbers) and "labels" key (list of strings). The lists MUST have at least 3 items.
 - Keep code under 30 lines. No comments.
 
 Respond ONLY with the corrected Python code inside a ```python ``` block.

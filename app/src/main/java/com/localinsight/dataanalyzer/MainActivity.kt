@@ -435,15 +435,22 @@ fun DataAnalyzerScreen(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     // Chart
+                    var chartLabels by remember(state.executionOutput) { mutableStateOf<List<String>>(emptyList()) }
                     val chartModel = remember(state.executionOutput) {
                         try {
                             val json = JSONObject(state.executionOutput)
                             val values = json.optJSONArray("values")
+                            val labelsArray = json.optJSONArray("labels")
+                            
                             if (values != null && values.length() > 0) {
                                 val entries = mutableListOf<FloatEntry>()
+                                val parsedLabels = mutableListOf<String>()
+                                
                                 for (i in 0 until values.length()) {
                                     entries.add(FloatEntry(i.toFloat(), values.getDouble(i).toFloat()))
+                                    parsedLabels.add(labelsArray?.optString(i) ?: i.toString())
                                 }
+                                chartLabels = parsedLabels
                                 entryModelOf(entries)
                             } else null
                         } catch (e: Exception) { null }
@@ -451,11 +458,16 @@ fun DataAnalyzerScreen(
 
                     if (chartModel != null) {
                         Text("Generated Chart", style = MaterialTheme.typography.titleMedium)
+                        
+                        val bottomAxisValueFormatter = com.patrykandpatrick.vico.core.axis.formatter.AxisValueFormatter<com.patrykandpatrick.vico.core.axis.AxisPosition.Horizontal.Bottom> { value, _ ->
+                            chartLabels.getOrNull(value.toInt()) ?: value.toString()
+                        }
+                        
                         Chart(
                             chart = columnChart(),
                             model = chartModel,
                             startAxis = rememberStartAxis(),
-                            bottomAxis = rememberBottomAxis(),
+                            bottomAxis = rememberBottomAxis(valueFormatter = bottomAxisValueFormatter),
                             modifier = Modifier.height(250.dp)
                         )
                     } else {

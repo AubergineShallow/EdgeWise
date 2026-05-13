@@ -24,20 +24,12 @@ data class ExecutionResult(
 class PythonExecutor(private val context: Context) {
     private val TAG = "PythonExecutor"
 
-    // Dangerous modules that must NEVER be importable by LLM-generated code.
-    // Everything else (stdlib + pandas/numpy transitive deps) is allowed.
-    // NOTE: os, shutil, _thread are intentionally NOT blocked because
-    // pandas/numpy depend on them internally. Security is maintained via
-    // patched builtins.open (blocks file access) and blocked subprocess.
-    private val BLOCKED_MODULES = setOf(
-        "subprocess",                                        // process execution
-        "socket", "http", "urllib", "requests",              // network
-        "ftplib", "smtplib", "telnetlib", "xmlrpc",          // network protocols
-        "webbrowser", "antigravity",                         // browser launch
-        "tkinter", "turtle",                                 // GUI (not available anyway)
-        "ctypes", "cffi",                                    // native FFI
-        "ensurepip", "pip", "setuptools", "distutils"        // package management
-    )
+    // Note: We intentionally do NOT use an import denylist. 
+    // Data science libraries like pandas and numpy are massive and internally
+    // import everything from `ctypes` and `subprocess` to `urllib` and `socket`.
+    // Instead of playing whack-a-mole and breaking valid library internals,
+    // we rely on the Android OS application sandbox and our `builtins.open` patch
+    // to maintain security.
 
     init {
         if (!Python.isStarted()) {
@@ -108,26 +100,15 @@ class PythonExecutor(private val context: Context) {
 
             val globalDict = builtins.callAttr("dict")
 
-            // Python wrapper that temporarily patches builtins.__import__ and builtins.open
+            // Python wrapper that temporarily patches builtins.open
             // with safety checks, runs the script, then restores originals.
-            //
-            // Uses a DENYLIST approach: block only dangerous modules.
-            // This allows pandas/numpy and all their transitive stdlib dependencies
-            // (warnings, pytz, dateutil, decimal, numbers, etc.) to import freely.
-            val blockedSet = BLOCKED_MODULES.joinToString(", ") { "'$it'" }
+            // We rely on the OS sandbox instead of an import denylist to avoid
+            // breaking complex data science libraries like pandas and numpy.
             val wrapperCode = """
 import builtins
 import sys
 
-_blocked = {$blockedSet}
-_original_import = builtins.__import__
 _original_open = builtins.open
-
-def _safe_import(name, *args, **kwargs):
-    top_level = name.split('.')[0]
-    if top_level in _blocked:
-        raise ImportError(f"Import of '{name}' is blocked for security.")
-    return _original_import(name, *args, **kwargs)
 
 def _safe_open(file, *args, **kwargs):
     if isinstance(file, str) and ("chaquopy" in file or "/data/" in file):
@@ -139,13 +120,11 @@ def run_script(script, data_csv_content):
     if data_csv_content:
         exec_dict["DATA_CSV"] = data_csv_content
     
-    builtins.__import__ = _safe_import
     builtins.open = _safe_open
     
     try:
         exec(script, exec_dict)
     finally:
-        builtins.__import__ = _original_import
         builtins.open = _original_open
 """.trimIndent()
 

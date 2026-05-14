@@ -103,6 +103,8 @@ fun PieChart(
 
         Spacer(modifier = Modifier.height(12.dp))
 
+        val textColor = MaterialTheme.colorScheme.onSurface
+
         // Legend
         Column(modifier = Modifier.padding(horizontal = 16.dp)) {
             values.forEachIndexed { index, value ->
@@ -118,6 +120,7 @@ fun PieChart(
                         Text(
                             text = "${labels[index]} (${value.toInt()})",
                             style = MaterialTheme.typography.bodySmall,
+                            color = textColor,
                             fontSize = 12.sp
                         )
                     }
@@ -148,6 +151,8 @@ fun HeatmapChart(
     val minVal = allValues.min()
     val maxVal = allValues.max()
 
+    val textColor = MaterialTheme.colorScheme.onSurface
+
     Row(modifier = modifier.horizontalScroll(rememberScrollState())) {
         // Y-axis labels
         Column(modifier = Modifier.padding(top = 40.dp)) {
@@ -159,6 +164,7 @@ fun HeatmapChart(
                     Text(
                         text = labels.getOrElse(i) { "" }.take(10),
                         fontSize = 10.sp,
+                        color = textColor,
                         modifier = Modifier.padding(end = 4.dp)
                     )
                 }
@@ -176,6 +182,7 @@ fun HeatmapChart(
                         Text(
                             text = labels.getOrElse(j) { "" }.take(6),
                             fontSize = 8.sp,
+                            color = textColor,
                             maxLines = 2
                         )
                     }

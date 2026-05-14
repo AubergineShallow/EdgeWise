@@ -113,8 +113,11 @@ import pandas as pd
 _original_open = builtins.open
 
 def _safe_open(file, *args, **kwargs):
-    if isinstance(file, str) and ("chaquopy" in file or "/data/" in file):
-        return _original_open(file, *args, **kwargs)
+    if isinstance(file, str):
+        if "chaquopy" in file or "/data/" in file:
+            return _original_open(file, *args, **kwargs)
+        if hasattr(builtins, 'FILE_PATH') and file in builtins.FILE_PATH.split('|'):
+            return _original_open(file, *args, **kwargs)
     raise IOError(f"File access to '{file}' is restricted.")
 
 def _load_data(path=None):

@@ -126,7 +126,8 @@ class LlmPipeline(
 
     data class AnalysisSuggestion(
         val title: String,
-        val description: String
+        val description: String,
+        val chartType: String = ""
     )
 
     // ────────────────────────────────────────────
@@ -157,8 +158,10 @@ STRICT RULES:
 5. BLOCKED modules: subprocess, shutil, socket, http, urllib, requests, ctypes, signal, multiprocessing, importlib.
 6. All Python scripts MUST print their final result to stdout as a valid JSON string.
 7. The JSON output MUST contain a "values" key with a list of numbers suitable for charting.
-8. Keep code SHORT (under 40 lines). You are on a resource-constrained edge device with limited token output.
-9. When asked to think step by step, show your reasoning clearly before giving the final answer.
+8. The JSON output MUST contain a "chart_type" key. You MUST choose ONLY from these exact supported types: "bar", "line", "pie", "histogram", "heatmap".
+9. The JSON output MUST contain a "labels" key with a list of string labels corresponding to the values.
+10. Keep code SHORT (under 40 lines). You are on a resource-constrained edge device with limited token output.
+11. When asked to think step by step, show your reasoning clearly before giving the final answer.
 """.trimIndent()
 
     // ────────────────────────────────────────────
@@ -403,11 +406,11 @@ ER STRUCTURE:
 $cachedErDiagram
 
 For each suggestion, respond in EXACTLY this format (one per line):
-SUGGESTION 1: [Short Title] | [One sentence description of what this analysis reveals]
-SUGGESTION 2: [Short Title] | [One sentence description of what this analysis reveals]
-SUGGESTION 3: [Short Title] | [One sentence description of what this analysis reveals]
+SUGGESTION 1: [Short Title] | [One sentence description of what this analysis reveals] | [Chart Type: bar, line, pie, histogram, or heatmap]
+SUGGESTION 2: [Short Title] | [One sentence description of what this analysis reveals] | [Chart Type: bar, line, pie, histogram, or heatmap]
+SUGGESTION 3: [Short Title] | [One sentence description of what this analysis reveals] | [Chart Type: bar, line, pie, histogram, or heatmap]
 
-Only suggest analyses that can be performed with the columns that exist in the schema. Do not suggest anything requiring external data.
+Only suggest analyses that can be performed with the columns that exist in the schema. Do not suggest anything requiring external data. Make sure the analysis can be visualized using ONLY one of the supported chart types: bar, line, pie, histogram, heatmap.
 """.trimIndent()
 
             val suggestionsRaw = streamResponse(suggestionsPrompt, "Generating Analysis Suggestions", 3)
@@ -430,7 +433,8 @@ Only suggest analyses that can be performed with the columns that exist in the s
 
     suspend fun submitSuggestionChoice(suggestion: AnalysisSuggestion) = withContext(Dispatchers.IO) {
         _pipelineState.value = PipelineState.Processing("Preparing code execution...")
-        currentAnalysisDescription = "${suggestion.title}: ${suggestion.description}"
+        val typeAddendum = if (suggestion.chartType.isNotBlank()) " The requested chart format to use is: ${suggestion.chartType}." else ""
+        currentAnalysisDescription = "${suggestion.title}: ${suggestion.description}.$typeAddendum"
         generateAndValidateCode()
     }
 
@@ -904,15 +908,19 @@ Respond ONLY with the corrected Python code inside a ```python ``` block.
 
     private fun parseSuggestions(raw: String): List<AnalysisSuggestion> {
         val suggestions = mutableListOf<AnalysisSuggestion>()
-        val regex = Regex("SUGGESTION\\s*\\d+:\\s*(.+?)\\s*\\|\\s*(.+)")
+        val regex = Regex("SUGGESTION\\s*\\d+:\\s*(.+?)\\s*\\|\\s*(.+?)\\s*(?:\\|\\s*(.+))?$")
 
-        for (match in regex.findAll(raw)) {
-            suggestions.add(
-                AnalysisSuggestion(
-                    title = match.groupValues[1].trim(),
-                    description = match.groupValues[2].trim()
+        for (match in raw.lineSequence()) {
+            val matched = regex.find(match)
+            if (matched != null) {
+                suggestions.add(
+                    AnalysisSuggestion(
+                        title = matched.groupValues[1].trim(),
+                        description = matched.groupValues[2].trim(),
+                        chartType = matched.groupValues.getOrNull(3)?.trim() ?: ""
+                    )
                 )
-            )
+            }
         }
 
         // Fallback if model didn't follow the format perfectly
@@ -920,7 +928,8 @@ Respond ONLY with the corrected Python code inside a ```python ``` block.
             suggestions.add(
                 AnalysisSuggestion(
                     title = "Basic Statistical Summary",
-                    description = "Compute mean, median, and standard deviation for all numeric columns."
+                    description = "Compute mean, median, and standard deviation for all numeric columns.",
+                    chartType = "bar"
                 )
             )
         }

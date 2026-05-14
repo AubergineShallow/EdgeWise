@@ -38,6 +38,8 @@ import com.patrykandpatrick.vico.compose.axis.vertical.rememberStartAxis
 import com.patrykandpatrick.vico.compose.chart.Chart
 import com.patrykandpatrick.vico.compose.chart.column.columnChart
 import com.patrykandpatrick.vico.compose.chart.line.lineChart
+import com.patrykandpatrick.vico.compose.component.textComponent
+import com.patrykandpatrick.vico.core.component.text.TextComponent
 import com.patrykandpatrick.vico.core.entry.FloatEntry
 import com.patrykandpatrick.vico.core.entry.entryModelOf
 import kotlinx.coroutines.launch
@@ -87,6 +89,9 @@ fun DataAnalyzerScreen(
     var detailsContent by remember { mutableStateOf("") }
     var detailsTitle by remember { mutableStateOf("") }
     var customRequestText by remember { mutableStateOf("") }
+
+    // Export state
+    var showExportDialog by remember { mutableStateOf(false) }
 
     // Auto-scroll to bottom when streaming
     LaunchedEffect(pipelineState) {
@@ -635,12 +640,20 @@ fun DataAnalyzerScreen(
                                 val model = entryModelOf(entries)
                                 val bottomFmt = com.patrykandpatrick.vico.core.axis.formatter.AxisValueFormatter<
                                     com.patrykandpatrick.vico.core.axis.AxisPosition.Horizontal.Bottom
-                                > { value, _ -> labels.getOrNull(value.toInt()) ?: value.toString() }
+                                > { value, _ ->
+                                    val label = labels.getOrNull(value.toInt()) ?: value.toString()
+                                    if (label.length > 10) label.take(10) + "..." else label
+                                }
+                                val labelTextColor = MaterialTheme.colorScheme.onSurface
                                 Chart(
                                     chart = lineChart(),
                                     model = model,
-                                    startAxis = rememberStartAxis(),
-                                    bottomAxis = rememberBottomAxis(valueFormatter = bottomFmt),
+                                    startAxis = rememberStartAxis(label = textComponent(color = labelTextColor)),
+                                    bottomAxis = rememberBottomAxis(
+                                        label = textComponent(color = labelTextColor),
+                                        valueFormatter = bottomFmt,
+                                        labelRotationDegrees = -45f
+                                    ),
                                     modifier = Modifier.height(250.dp)
                                 )
                             }
@@ -652,12 +665,20 @@ fun DataAnalyzerScreen(
                                 val model = entryModelOf(entries)
                                 val bottomFmt = com.patrykandpatrick.vico.core.axis.formatter.AxisValueFormatter<
                                     com.patrykandpatrick.vico.core.axis.AxisPosition.Horizontal.Bottom
-                                > { value, _ -> labels.getOrNull(value.toInt()) ?: value.toString() }
+                                > { value, _ ->
+                                    val label = labels.getOrNull(value.toInt()) ?: value.toString()
+                                    if (label.length > 10) label.take(10) + "..." else label
+                                }
+                                val labelTextColor = MaterialTheme.colorScheme.onSurface
                                 Chart(
                                     chart = columnChart(),
                                     model = model,
-                                    startAxis = rememberStartAxis(),
-                                    bottomAxis = rememberBottomAxis(valueFormatter = bottomFmt),
+                                    startAxis = rememberStartAxis(label = textComponent(color = labelTextColor)),
+                                    bottomAxis = rememberBottomAxis(
+                                        label = textComponent(color = labelTextColor),
+                                        valueFormatter = bottomFmt,
+                                        labelRotationDegrees = -45f
+                                    ),
                                     modifier = Modifier.height(250.dp)
                                 )
                             }
@@ -760,6 +781,18 @@ fun DataAnalyzerScreen(
                             modifier = Modifier.weight(1f)
                         ) { Text("Looks Good!") }
                     }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Button(
+                        onClick = { showExportDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.secondary
+                        )
+                    ) {
+                        Text("Export Results")
+                    }
                 }
 
                 // ── Error ──
@@ -805,6 +838,83 @@ fun DataAnalyzerScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showDetailsDialog = false }) { Text("Close") }
+            }
+        )
+    }
+
+    // ── Export Dialog ──
+    if (showExportDialog && pipelineState is LlmPipeline.PipelineState.AwaitingSatisfaction) {
+        val state = pipelineState as LlmPipeline.PipelineState.AwaitingSatisfaction
+
+        var exportData by remember { mutableStateOf(true) }
+        var exportScript by remember { mutableStateOf(false) }
+        var exportReport by remember { mutableStateOf(false) }
+
+        val directoryPickerLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.OpenDocumentTree()
+        ) { uri ->
+            if (uri != null) {
+                coroutineScope.launch {
+                    val report = """
+                        |Analysis: ${state.analysisDescription}
+                        |
+                        |--- Data ---
+                        |${state.executionOutput}
+                        |
+                        |--- Execution Log ---
+                        |${state.executionLog}
+                    """.trimMargin()
+
+                    DataExporter.exportDataSaf(
+                        context = context,
+                        treeUri = uri,
+                        exportData = exportData,
+                        dataContent = state.executionOutput,
+                        exportScript = exportScript,
+                        scriptContent = state.code,
+                        exportReport = exportReport,
+                        reportContent = report
+                    )
+                }
+            }
+            showExportDialog = false
+        }
+
+        AlertDialog(
+            onDismissRequest = { showExportDialog = false },
+            title = { Text("Export Options") },
+            text = {
+                Column {
+                    Text("Select items to export:")
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportData, onCheckedChange = { exportData = it })
+                        Text("Data (JSON)")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportScript, onCheckedChange = { exportScript = it })
+                        Text("Python Script (.py)")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = exportReport, onCheckedChange = { exportReport = it })
+                        Text("Full Report (.txt)")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (exportData || exportScript || exportReport) {
+                            directoryPickerLauncher.launch(null)
+                        } else {
+                            showExportDialog = false
+                        }
+                    }
+                ) { Text("Choose Directory & Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExportDialog = false }) { Text("Cancel") }
             }
         )
     }
@@ -891,12 +1001,30 @@ fun SuggestionCard(
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                "Option $index: ${suggestion.title}",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSecondaryContainer
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Option $index: ${suggestion.title}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.weight(1f)
+                )
+                if (suggestion.chartType.isNotBlank()) {
+                    Badge(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ) {
+                        Text(
+                            text = suggestion.chartType,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 suggestion.description,

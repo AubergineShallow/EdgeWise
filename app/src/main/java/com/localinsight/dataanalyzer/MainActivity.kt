@@ -157,6 +157,15 @@ fun DataAnalyzerScreen(
                     }
                 }
 
+                // ── Processing (Generic transition state) ──
+                is LlmPipeline.PipelineState.Processing -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(state.message)
+                    }
+                }
+
                 // ── Streaming (live token output) ──
                 is LlmPipeline.PipelineState.Streaming -> {
                     StepHeader(number = state.stepNumber, title = state.stepName, inProgress = true)

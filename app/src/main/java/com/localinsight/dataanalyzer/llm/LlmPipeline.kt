@@ -44,6 +44,9 @@ class LlmPipeline(
         object Idle : PipelineState()
         object LoadingModel : PipelineState()
 
+        /** Generic loading/processing state with a custom message */
+        data class Processing(val message: String) : PipelineState()
+
         /** Live token output visible to user */
         data class Streaming(
             val stepName: String,
@@ -282,6 +285,7 @@ print(json.dumps(schema))
     }
 
     suspend fun proceedToSchemaProfiling(contextInput: String?, isRetry: Boolean = false) = withContext(Dispatchers.IO) {
+        _pipelineState.value = PipelineState.Processing(if (isRetry) "Applying feedback..." else "Profiling schema...")
         if (!isRetry && !contextInput.isNullOrBlank()) {
             cachedInitialContext = contextInput
         }
@@ -337,6 +341,7 @@ Summarize your findings as a structured schema profile with a table of: Column N
     }
 
     suspend fun proceedToRelationalMapping(feedback: String?, isRetry: Boolean = false) = withContext(Dispatchers.IO) {
+        _pipelineState.value = PipelineState.Processing(if (isRetry) "Applying feedback..." else "Mapping relations...")
         try {
             val relationalPrompt = if (!isRetry) {
                 """
@@ -383,6 +388,7 @@ Output a clear text-based ER diagram.
     }
 
     suspend fun proceedToSuggestions() = withContext(Dispatchers.IO) {
+        _pipelineState.value = PipelineState.Processing("Generating analysis suggestions...")
         try {
             val suggestionsPrompt = """
 Based on the schema, structure, and user's goal below, suggest exactly $NUM_SUGGESTIONS different analyses that would provide useful insights from this data.
@@ -423,6 +429,7 @@ Only suggest analyses that can be performed with the columns that exist in the s
     // ────────────────────────────────────────────
 
     suspend fun submitSuggestionChoice(suggestion: AnalysisSuggestion) = withContext(Dispatchers.IO) {
+        _pipelineState.value = PipelineState.Processing("Preparing code execution...")
         currentAnalysisDescription = "${suggestion.title}: ${suggestion.description}"
         generateAndValidateCode()
     }
@@ -432,6 +439,7 @@ Only suggest analyses that can be performed with the columns that exist in the s
     // ────────────────────────────────────────────
 
     suspend fun submitCustomRequest(request: String) = withContext(Dispatchers.IO) {
+        _pipelineState.value = PipelineState.Processing("Evaluating request...")
         try {
             _pipelineState.value = PipelineState.EvaluatingCustomRequest(request)
 
@@ -513,11 +521,13 @@ SUGGESTION 3: [Short Title] | [One sentence description]
     // ────────────────────────────────────────────
 
     suspend fun confirmPlan(refinedPlan: String) = withContext(Dispatchers.IO) {
+        _pipelineState.value = PipelineState.Processing("Preparing code execution...")
         currentAnalysisDescription = refinedPlan
         generateAndValidateCode()
     }
 
     fun rejectPlan() {
+        _pipelineState.value = PipelineState.Processing("Returning to suggestions...")
         // Go back to suggestions
         _pipelineState.value = PipelineState.AwaitingSuggestionChoice(
             suggestions = emptyList(), // Will trigger re-generation
@@ -531,6 +541,7 @@ SUGGESTION 3: [Short Title] | [One sentence description]
     // ────────────────────────────────────────────
 
     suspend fun rejectSatisfaction() = withContext(Dispatchers.IO) {
+        _pipelineState.value = PipelineState.Processing("Generating new suggestions...")
         // User wants a different analysis — go back to suggestion generation
         try {
             val suggestionsPrompt = """

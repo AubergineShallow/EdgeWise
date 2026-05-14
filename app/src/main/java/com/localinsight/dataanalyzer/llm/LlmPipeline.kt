@@ -51,6 +51,20 @@ class LlmPipeline(
             val partialText: String
         ) : PipelineState()
 
+        /** Waiting for the user to provide initial context before profiling */
+        object AwaitingInitialContext : PipelineState()
+
+        /** Waiting for user feedback on the generated schema */
+        data class AwaitingSchemaFeedback(
+            val schema: String
+        ) : PipelineState()
+
+        /** Waiting for user feedback on the generated ER diagram */
+        data class AwaitingRelationalFeedback(
+            val schema: String,
+            val erDiagram: String
+        ) : PipelineState()
+
         /** Model has generated suggestions; waiting for user to choose or type custom */
         data class AwaitingSuggestionChoice(
             val suggestions: List<AnalysisSuggestion>,
@@ -121,6 +135,8 @@ class LlmPipeline(
     private var cachedDataFilePath: String = ""
     private var cachedMetadata: String = ""
     private var currentAnalysisDescription: String = ""
+    private var cachedInitialContext: String = ""
+    private var cachedPythonSchemaStr: String = ""
 
     // ────────────────────────────────────────────
     //  System prompt (guardrails for the 2B model)
@@ -226,10 +242,10 @@ STRICT RULES:
     }
 
     // ────────────────────────────────────────────
-    //  Pipeline Entry Point
+    //  Pipeline Entry Point (Split into steps)
     // ────────────────────────────────────────────
 
-    suspend fun runPipeline(metadata: String, dataFilePath: String, fileUris: List<Uri>) = withContext(Dispatchers.IO) {
+    suspend fun startPipeline(metadata: String, dataFilePath: String, fileUris: List<Uri>) = withContext(Dispatchers.IO) {
         if (engine == null) {
             _pipelineState.value = PipelineState.Error("LLM not initialized")
             return@withContext
@@ -237,26 +253,97 @@ STRICT RULES:
 
         cachedMetadata = metadata
         cachedDataFilePath = dataFilePath
+        cachedInitialContext = ""
+        cachedSchema = ""
+        cachedErDiagram = ""
 
         try {
-            // ── Step 1: Schema Profiling (streamed with CoT) ──
-            val schemaPrompt = """
+            _pipelineState.value = PipelineState.Streaming("Extracting Schema", 1, "Reading file headers and types...")
+            val metadataScript = """
+import pandas as pd
+import json
+
+df = load_data()
+schema = []
+for col in df.columns:
+    col_type = str(df[col].dtype)
+    sample = df[col].dropna().head(3).tolist()
+    schema.append({"column": col, "type": col_type, "sample": sample})
+
+print(json.dumps(schema))
+""".trimIndent()
+
+            cachedPythonSchemaStr = pythonExecutor.executeBackgroundScript(metadataScript, cachedDataFilePath)
+            _pipelineState.value = PipelineState.AwaitingInitialContext
+        } catch (e: Exception) {
+            Log.e(TAG, "Pipeline error during init", e)
+            _pipelineState.value = PipelineState.Error(e.message ?: "Pipeline initialization failed")
+        }
+    }
+
+    suspend fun proceedToSchemaProfiling(contextInput: String?, isRetry: Boolean = false) = withContext(Dispatchers.IO) {
+        if (!isRetry && !contextInput.isNullOrBlank()) {
+            cachedInitialContext = contextInput
+        }
+
+        try {
+            val schemaPrompt = if (!isRetry) {
+                """
 Think step by step to analyze this data file.
 
-DATA METADATA:
-$metadata
+USER'S CONTEXT GOAL:
+${if (cachedInitialContext.isNotBlank()) cachedInitialContext else "None provided."}
+
+BASIC FILE INFO:
+$cachedMetadata
+
+EXTRACTED SCHEMA AND SAMPLES:
+$cachedPythonSchemaStr
 
 INSTRUCTIONS:
-1. First, list every column header you see.
-2. For each column, examine the sample values and reason about the most likely data type (integer, float, categorical string, date, boolean).
-3. Check for any missing, null, or empty values in the sample. Note the pattern.
-4. Summarize your findings as a structured schema profile with a table of: Column Name | Data Type | Nullable | Notes.
+1. List every column header from the JSON schema.
+2. For each column, examine the python data type and sample values, and reason about the most likely semantic data type (e.g., categorical, continuous numeric, boolean, date).
+3. Keep the user's context goal in mind.
+4. Summarize your findings as a structured schema profile with a table of: Column Name | Data Type | Notes.
 """.trimIndent()
-            cachedSchema = streamResponse(schemaPrompt, "Profiling Schema", 1)
+            } else {
+                """
+You previously generated a schema profile, but the user provided feedback to correct it.
 
-            // ── Step 2: Relational Mapping (streamed with CoT) ──
-            val relationalPrompt = """
+USER'S FEEDBACK/CORRECTION:
+${contextInput ?: "None"}
+
+PREVIOUS SCHEMA PROFILE:
+$cachedSchema
+
+BASIC FILE INFO:
+$cachedMetadata
+
+EXTRACTED SCHEMA AND SAMPLES:
+$cachedPythonSchemaStr
+
+INSTRUCTIONS:
+Refine and correct the schema profile based on the user's feedback.
+Summarize your findings as a structured schema profile with a table of: Column Name | Data Type | Notes.
+""".trimIndent()
+            }
+
+            cachedSchema = streamResponse(schemaPrompt, "Profiling Schema", 1)
+            _pipelineState.value = PipelineState.AwaitingSchemaFeedback(cachedSchema)
+        } catch (e: Exception) {
+            Log.e(TAG, "Schema profiling error", e)
+            _pipelineState.value = PipelineState.Error(e.message ?: "Schema profiling failed")
+        }
+    }
+
+    suspend fun proceedToRelationalMapping(feedback: String?, isRetry: Boolean = false) = withContext(Dispatchers.IO) {
+        try {
+            val relationalPrompt = if (!isRetry) {
+                """
 Think step by step to create an Entity-Relationship mapping.
+
+USER'S CONTEXT GOAL:
+${if (cachedInitialContext.isNotBlank()) cachedInitialContext else "None provided."}
 
 SCHEMA PROFILE:
 $cachedSchema
@@ -268,11 +355,40 @@ INSTRUCTIONS:
 4. If the data is a single flat table, describe it as one entity with all columns as attributes.
 5. Output a clear text-based ER diagram.
 """.trimIndent()
-            cachedErDiagram = streamResponse(relationalPrompt, "Mapping Relational Structure", 2)
+            } else {
+                """
+You previously generated an Entity-Relationship mapping, but the user provided feedback to correct it.
 
-            // ── Step 3: Generate Suggestions ──
+USER'S FEEDBACK/CORRECTION:
+${feedback ?: "None"}
+
+PREVIOUS ER DIAGRAM:
+$cachedErDiagram
+
+SCHEMA PROFILE:
+$cachedSchema
+
+INSTRUCTIONS:
+Refine and correct the ER diagram based on the user's feedback.
+Output a clear text-based ER diagram.
+""".trimIndent()
+            }
+
+            cachedErDiagram = streamResponse(relationalPrompt, "Mapping Relational Structure", 2)
+            _pipelineState.value = PipelineState.AwaitingRelationalFeedback(cachedSchema, cachedErDiagram)
+        } catch (e: Exception) {
+            Log.e(TAG, "Relational mapping error", e)
+            _pipelineState.value = PipelineState.Error(e.message ?: "Relational mapping failed")
+        }
+    }
+
+    suspend fun proceedToSuggestions() = withContext(Dispatchers.IO) {
+        try {
             val suggestionsPrompt = """
-Based on the schema and structure below, suggest exactly $NUM_SUGGESTIONS different analyses that would provide useful insights from this data.
+Based on the schema, structure, and user's goal below, suggest exactly $NUM_SUGGESTIONS different analyses that would provide useful insights from this data.
+
+USER'S CONTEXT GOAL:
+${if (cachedInitialContext.isNotBlank()) cachedInitialContext else "None provided."}
 
 SCHEMA:
 $cachedSchema
@@ -296,10 +412,9 @@ Only suggest analyses that can be performed with the columns that exist in the s
                 schema = cachedSchema,
                 erDiagram = cachedErDiagram
             )
-
         } catch (e: Exception) {
-            Log.e(TAG, "Pipeline error", e)
-            _pipelineState.value = PipelineState.Error(e.message ?: "Pipeline execution failed")
+            Log.e(TAG, "Suggestion generation error", e)
+            _pipelineState.value = PipelineState.Error(e.message ?: "Suggestion generation failed")
         }
     }
 

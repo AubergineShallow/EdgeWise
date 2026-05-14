@@ -121,7 +121,7 @@ fun DataAnalyzerScreen(
                         val cachedFilePaths = DataIngestion.cacheMultipleDataFiles(context, uris)
                         if (cachedFilePaths != null) {
                             val metadata = DataIngestion.extractMetadata(context, uris)
-                            llmPipeline.runPipeline(metadata, cachedFilePaths, uris)
+                            llmPipeline.startPipeline(metadata, cachedFilePaths, uris)
                         } else {
                             android.widget.Toast.makeText(context, "Failed to load files", android.widget.Toast.LENGTH_SHORT).show()
                         }
@@ -162,6 +162,113 @@ fun DataAnalyzerScreen(
                     StepHeader(number = state.stepNumber, title = state.stepName, inProgress = true)
                     Spacer(modifier = Modifier.height(8.dp))
                     StreamingTextBox(text = state.partialText)
+                }
+
+                // ── Awaiting Initial Context ──
+                is LlmPipeline.PipelineState.AwaitingInitialContext -> {
+                    StepHeader(number = 1, title = "Initial Context", inProgress = false)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "What is this data about? (Optional but helps guide the analysis)",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    var contextText by remember { mutableStateOf("") }
+                    OutlinedTextField(
+                        value = contextText,
+                        onValueChange = { contextText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("e.g. Monthly sales report for 2023...") }
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = {
+                            coroutineScope.launch {
+                                llmPipeline.proceedToSchemaProfiling(contextText)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Start Analysis")
+                    }
+                }
+
+                // ── Awaiting Schema Feedback ──
+                is LlmPipeline.PipelineState.AwaitingSchemaFeedback -> {
+                    StepHeader(number = 1, title = "Schema Profiling Completed", inProgress = false)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    StreamingTextBox(text = state.schema)
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text("Does this look correct? If not, provide feedback to regenerate:", style = MaterialTheme.typography.labelLarge)
+                    var feedbackText by remember { mutableStateOf("") }
+                    OutlinedTextField(
+                        value = feedbackText,
+                        onValueChange = { feedbackText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("e.g. Column 'user_id' is categorical, not numeric") }
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    llmPipeline.proceedToSchemaProfiling(feedbackText, isRetry = true)
+                                }
+                            },
+                            enabled = feedbackText.isNotBlank()
+                        ) {
+                            Text("Retry with Feedback")
+                        }
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    llmPipeline.proceedToRelationalMapping(null)
+                                }
+                            }
+                        ) {
+                            Text("Proceed")
+                        }
+                    }
+                }
+
+                // ── Awaiting Relational Feedback ──
+                is LlmPipeline.PipelineState.AwaitingRelationalFeedback -> {
+                    StepHeader(number = 2, title = "Relational Mapping Completed", inProgress = false)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    StreamingTextBox(text = state.erDiagram)
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text("Does this look correct? If not, provide feedback to regenerate:", style = MaterialTheme.typography.labelLarge)
+                    var feedbackText by remember { mutableStateOf("") }
+                    OutlinedTextField(
+                        value = feedbackText,
+                        onValueChange = { feedbackText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("e.g. Users table has a one-to-many relationship with Orders") }
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    llmPipeline.proceedToRelationalMapping(feedbackText, isRetry = true)
+                                }
+                            },
+                            enabled = feedbackText.isNotBlank()
+                        ) {
+                            Text("Retry with Feedback")
+                        }
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    llmPipeline.proceedToSuggestions()
+                                }
+                            }
+                        ) {
+                            Text("Proceed")
+                        }
+                    }
                 }
 
                 // ── Awaiting Suggestion Choice ──
